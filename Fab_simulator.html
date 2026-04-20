@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Fab Sandbox (ISRC Full Edition)</title>
+    <style>
+        :root {
+            --fab-bg: #1e1e24; --equip-bg: #2b2b36; --equip-border: #4da8da;
+            --yellow-room: rgba(255, 204, 0, 0.12); --yellow-border: #ffcc00;
+            --text-light: #e0e0e0;
+        }
+        body { margin: 0; padding: 15px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121215; color: var(--text-light); display: flex; gap: 15px; height: 100vh; box-sizing: border-box; overflow: hidden; }
+        
+        /* 왼쪽: Fab 레이아웃 */
+        #fab-area { flex: 1.2; border: 2px solid #444; border-radius: 10px; background-color: var(--fab-bg); padding: 15px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: auto auto auto auto; gap: 15px; position: relative; overflow-y: auto; }
+        .zone { border: 2px dashed #555; border-radius: 8px; padding: 10px; position: relative; display: flex; flex-direction: column; background-color: rgba(255,255,255,0.02); min-height: 120px; }
+        .zone-title { font-weight: bold; font-size: 0.9rem; margin-bottom: 10px; color: #999; pointer-events: none; text-align: center; }
+        
+        /* 특수 구역 */
+        .yellow-room { background-color: var(--yellow-room); border-color: var(--yellow-border); grid-column: 1 / 4; flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 15px; }
+        .yellow-room .zone-title { width: 100%; color: #ffcc00; margin-bottom: 5px; }
+        
+        .equipment { background-color: var(--equip-bg); border: 2px solid var(--equip-border); border-radius: 8px; padding: 8px; text-align: center; cursor: pointer; transition: 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: bold; font-size: 0.85rem; box-shadow: 0 4px 10px rgba(0,0,0,0.5); flex: 1; min-height: 60px; }
+        .equipment:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(77, 168, 218, 0.6); }
+        .equipment.drag-over { background-color: #3a3a4a; border-color: #2ed573; box-shadow: 0 0 20px rgba(46, 213, 115, 0.8); }
+        .eq-desc { font-size: 0.7rem; color: #aaa; font-weight: normal; margin-top: 5px; pointer-events: none;}
+
+        /* Wafer */
+        #wafer-carrier { width: 45px; height: 45px; background: radial-gradient(circle, #e0e0e0, #888); border-radius: 50%; border: 2px solid #fff; position: absolute; top: 15px; right: 15px; cursor: grab; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: #000; font-weight: bold; z-index: 100; box-shadow: 0 5px 15px rgba(0,0,0,0.8); }
+        #wafer-carrier:active { cursor: grabbing; }
+
+        /* 오른쪽: Panels */
+        #control-panel { flex: 1; display: flex; flex-direction: column; gap: 15px; }
+        .panel-box { background-color: #1a1a20; border: 1px solid #333; border-radius: 10px; padding: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        h3 { margin-top: 0; color: #4da8da; border-bottom: 1px solid #333; padding-bottom: 8px; margin-bottom: 12px; font-size: 1.1rem; }
+        
+        .canvas-wrapper { width: 100%; display: flex; flex-direction: column; align-items: center; margin-bottom: 10px; }
+        .view-label { font-size: 0.85rem; color: #aaa; margin-bottom: 5px; font-weight: bold; }
+        canvas { background-color: #0f0f13; border: 1px solid #444; border-radius: 5px; width: 100%; height: 220px; box-shadow: inset 0 0 20px rgba(0,0,0,0.8); }
+
+        #log-area { flex-grow: 1; background: #050505; color: #2ed573; font-family: monospace; padding: 10px; border-radius: 5px; overflow-y: auto; font-size: 0.85rem; max-height: 250px; border: 1px solid #222; }
+
+        /* Modal */
+        #process-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 200; }
+        .modal-content { background: #222; padding: 25px; border-radius: 12px; border: 1px solid #555; min-width: 320px; box-shadow: 0 10px 50px rgba(0,0,0,0.8); }
+        .form-group { margin-bottom: 15px; display: flex; flex-direction: column; gap: 5px;}
+        .form-group label { color: #ccc; font-size: 0.9rem; font-weight: bold; }
+        .form-group input, .form-group select { background: #111; color: #fff; border: 1px solid #555; padding: 8px; border-radius: 4px; width: 100%; box-sizing: border-box; font-family: inherit;}
+        .btn-run { background: #4da8da; color: #000; border: none; padding: 12px; border-radius: 5px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px; transition: 0.2s; }
+        .btn-run:hover { background: #66b8e6; }
+        .btn-cancel { background: transparent; color: #888; border: 1px solid #555; padding: 10px; border-radius: 5px; cursor: pointer; width: 100%; margin-top: 10px; }
+        .helper-text { font-size: 0.75rem; color: #888; margin-top: -3px; }
+
+        /* Utility */
+        .color-box { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+        #legend { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; font-size: 0.8rem; margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="fab-area">
+        <div class="zone" id="start-zone" style="grid-column: 1 / 4; min-height: 80px; flex-direction: row; align-items: center; justify-content: space-between;">
+            <div class="zone-title" style="margin:0;">Wafer Load Port (Start)</div>
+            <div id="wafer-carrier" draggable="true">Wafer</div>
+        </div>
+
+        <div class="zone">
+            <div class="zone-title">Thermal / CVD</div>
+            <div class="equipment" data-equip="furnace">Thermal Furnace<div class="eq-desc">Oxidation (SiO2)</div></div>
+            <div class="equipment" data-equip="pecvd" style="margin-top: 10px; border-color: #a29bfe;">PECVD<div class="eq-desc">Depo (SiNx / SiO2)</div></div>
+        </div>
+
+        <div class="zone">
+            <div class="zone-title">PVD / Implantation</div>
+            <div class="equipment" data-equip="endura" style="border-color: #dfe6e9;">AMAT Endura<div class="eq-desc">Sputtering (Al/Ti)</div></div>
+            <div class="equipment" data-equip="implanter" style="margin-top: 10px; border-color: #fdcb6e;">Ion Implanter<div class="eq-desc">Doping (B/P/As)</div></div>
+        </div>
+
+        <div class="zone">
+            <div class="zone-title">Dry Etch Area</div>
+            <div class="equipment" data-equip="drie" style="border-color: #ff7675;">STS ICP-RIE<div class="eq-desc">Deep Si Etch (Bosch)</div></div>
+            <div class="equipment" data-equip="rie" style="margin-top: 10px; border-color: #e17055;">Lam RIE<div class="eq-desc">Oxide/Poly/Metal Etch</div></div>
+        </div>
+
+        <div class="zone yellow-room">
+            <div class="zone-title">Yellow Room (Photolithography Class 10)</div>
+            <div class="equipment" data-equip="track" style="flex: 0 1 45%;">PR Track<div class="eq-desc">Spin Coat & Develop</div></div>
+            <div class="equipment" data-equip="stepper" style="flex: 0 1 45%;">Nikon Stepper<div class="eq-desc">i-line Exposure</div></div>
+        </div>
+
+        <div class="zone" style="grid-column: 1 / 4; flex-direction: row; gap: 15px;">
+            <div class="zone-title" style="writing-mode: vertical-rl; margin:0;">Wet & Clean</div>
+            <div class="equipment" data-equip="asher" style="flex:1; border-color: #00cec9;">O2 Asher<div class="eq-desc">Plasma PR Strip</div></div>
+            <div class="equipment" data-equip="wet_etch" style="flex:1; border-color: #74b9ff;">Wet Bath<div class="eq-desc">Isotropic Etchant</div></div>
+            <div class="equipment" data-equip="wet_clean" style="flex:1; border-color: #81ecec;">SPM/SC-1<div class="eq-desc">Wafer Cleaning</div></div>
+        </div>
+    </div>
+
+    <div id="control-panel">
+        <div class="panel-box">
+            <h3>Metrology (Cross-Section SEM)</h3>
+            <div class="canvas-wrapper">
+                <canvas id="cs-canvas" width="400" height="280"></canvas>
+            </div>
+            <div id="legend">
+                </div>
+        </div>
+        
+        <div class="panel-box" style="flex-grow: 1;">
+            <h3>Process Log</h3>
+            <div id="log-area">
+                > System Boot... ISRC Free-form Sandbox Ready.<br>
+                > Bare p-type Si Wafer Loaded.<br>
+                > 장비로 Wafer를 드래그하여 공정을 시작하세요.
+            </div>
+        </div>
+    </div>
+
+    <div id="process-modal">
+        <div class="modal-content">
+            <h3 id="modal-title">Equipment Setup</h3>
+            <div id="modal-body"></div>
+            <button class="btn-run" id="btn-run">RUN PROCESS</button>
+            <button class="btn-cancel" id="btn-cancel">Cancel</button>
+        </div>
+    </div>
+
+<script>
+    // --- 물성 정의 (색상 및 이름) ---
+    const materials = {
+        'Si': { name: 'Silicon', color: '#636e72' },
+        'Si-p': { name: 'P-doped Si', color: '#2d3436' },
+        'Si-n': { name: 'N-doped Si', color: '#b2bec3' },
+        'SiO2': { name: 'Oxide (SiO2)', color: '#0984e3' },
+        'SiNx': { name: 'Nitride (SiNx)', color: '#6c5ce7' },
+        'Al': { name: 'Metal (Al)', color: '#dfe6e9' },
+        'PR': { name: 'Photoresist', color: '#d63031' }
+    };
+
+    // 범례 생성
+    const legendDiv = document.getElementById('legend');
+    for (let key in materials) {
+        legendDiv.innerHTML += `<div><span class="color-box" style="background:${materials[key].color}"></span>${key}</div>`;
+    }
+
+    // --- 웨이퍼 Stack 데이터 구조 ---
+    // 자유로운 식각/증착을 위해 L(Left), C(Center), R(Right) 3구역의 두께를 독립적으로 관리하는 어레이 구조
+    let waferStack = [
+        { mat: 'Si', L: 200, C: 200, R: 200, exp: false } // Base Wafer
+    ];
+
+    let currentEquip = null;
+    const logArea = document.getElementById('log-area');
+    const canvas = document.getElementById('cs-canvas');
+    const ctx = canvas.getContext('2d');
+    const modal = document.getElementById('process-modal');
+    const modalBody = document.getElementById('modal-body');
+
+    function log(msg) { logArea.innerHTML += `> ${msg}<br>`; logArea.scrollTop = logArea.scrollHeight; }
+
+    // --- Drag & Drop ---
+    const carrier = document.getElementById('wafer-carrier');
+    const equipments = document.querySelectorAll('.equipment');
+    
+    carrier.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', 'wafer'); setTimeout(() => carrier.style.opacity = '0.5', 0); });
+    carrier.addEventListener('dragend', () => carrier.style.opacity = '1');
+
+    equipments.forEach(eq => {
+        eq.addEventListener('dragover', (e) => { e.preventDefault(); eq.classList.add('drag-over'); });
+        eq.addEventListener('dragleave', () => eq.classList.remove('drag-over'));
+        eq.addEventListener('drop', (e) => {
+            e.preventDefault(); eq.classList.remove('drag-over');
+            eq.appendChild(carrier); carrier.style.position = 'relative'; carrier.style.top = '0'; carrier.style.right = '0';
+            openModal(eq.dataset.equip);
+        });
+    });
+
+    // --- 장비 파라미터 모달 ---
+    const equipConfigs = {
+        'furnace': { title: 'Thermal Furnace', html: `<div class="form-group"><label>Process</label><select id="p-gas"><option value="dry">Dry Oxidation (O2)</option><option value="wet">Wet Oxidation (H2O)</option></select></div><div class="form-group"><label>Time (mins)</label><input type="number" id="p-time" value="60"></div>` },
+        'pecvd': { title: 'PECVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="SiNx">Silicon Nitride (SiNx)</option><option value="SiO2">Silicon Dioxide (SiO2)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="50"></div>` },
+        'endura': { title: 'AMAT Endura 5500', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="Al">Aluminum (Al)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="100"></div>` },
+        'implanter': { title: 'Ion Implanter', html: `<div class="form-group"><label>Dopant Type</label><select id="p-dop"><option value="n">Phosphorus (N-type)</option><option value="p">Boron (P-type)</option></select></div><div class="helper-text">* Exposed Si surface will be doped.</div>` },
+        'track': { title: 'PR Track', html: `<div class="form-group"><label>Operation</label><select id="p-op"><option value="coat">Spin Coat (Pos PR)</option><option value="dev">Develop</option></select></div>` },
+        'stepper': { title: 'Nikon Stepper', html: `<div class="form-group"><label>Reticle (Mask) Type</label><select id="p-mask"><option value="dark">Dark Field (Trench/Hole - Exposes Center)</option><option value="clear">Clear Field (Line/Gate - Exposes Edges)</option></select></div><div class="form-group"><label>Dose (mJ)</label><input type="number" id="p-dose" value="150"></div>` },
+        'drie': { title: 'STS ICP-RIE (Deep Si Etch)', html: `<div class="form-group"><label>Etch Time (sec)</label><input type="number" id="p-time" value="60"></div><div class="helper-text">* Bosch Process: Etches 'Si' rapidly. Highly anisotropic.</div>` },
+        'rie': { title: 'Lam RIE', html: `<div class="form-group"><label>Target Material to Etch</label><select id="p-target"><option value="SiO2">Oxide (SiO2)</option><option value="SiNx">Nitride (SiNx)</option><option value="Al">Metal (Al)</option></select></div><div class="form-group"><label>Etch Amount (nm)</label><input type="number" id="p-amt" value="50"></div><div class="helper-text">* Anisotropic vertical etch.</div>` },
+        'asher': { title: 'O2 Asher', html: `<div class="helper-text">Plasma strips all Photoresist (PR) from the wafer.</div>` },
+        'wet_etch': { title: 'Wet Bath', html: `<div class="form-group"><label>Etchant</label><select id="p-etchant"><option value="BOE">BOE (Etches SiO2)</option><option value="PAN">PAN (Etches Al)</option></select></div><div class="helper-text">* Isotropic etch. Will remove exposed target material.</div>` },
+        'wet_clean': { title: 'SPM / SC-1 Clean', html: `<div class="helper-text">Cleans organic residues and particles.</div>` }
+    };
+
+    function openModal(equipId) {
+        currentEquip = equipId;
+        document.getElementById('modal-title').innerText = equipConfigs[equipId].title;
+        modalBody.innerHTML = equipConfigs[equipId].html;
+        modal.style.display = 'flex';
+    }
+
+    document.getElementById('btn-cancel').addEventListener('click', () => modal.style.display = 'none');
+
+    // --- 공정 코어 수학 엔진 ---
+    // 증착 (모든 열에 동일하게 더함)
+    function deposit(mat, thk) {
+        waferStack.push({ mat: mat, L: thk, C: thk, R: thk, exp: false });
+        log(`${mat} ${thk}nm 증착 완료.`);
+    }
+
+    // 최상단 노출 층 식각 (특정 영역만)
+    function etchRegion(region, targetMat, amount, isAnisotropic) {
+        let remaining = amount;
+        for (let i = waferStack.length - 1; i >= 0; i--) {
+            if (remaining <= 0) break;
+            if (waferStack[i][region] > 0) {
+                // 선택비(Selectivity) 확인
+                if (targetMat === 'All' || waferStack[i].mat === targetMat || targetMat === 'Si_Deep' && waferStack[i].mat.startsWith('Si')) {
+                    let etched = Math.min(waferStack[i][region], remaining);
+                    waferStack[i][region] -= etched;
+                    remaining -= etched;
+                    // PR 마스크가 있는 경우 Dry etch면 직진, Wet이면 등방성이지만 여기선 2.5D 간략화
+                } else {
+                    // 타겟 물질이 아니면 Etch Stop (선택비 무한대 가정)
+                    break;
+                }
+            }
+        }
+    }
+
+    // 빈 레이어 청소
+    function cleanEmptyLayers() {
+        waferStack = waferStack.filter(layer => layer.L > 0 || layer.C > 0 || layer.R > 0);
+    }
+
+    document.getElementById('btn-run').addEventListener('click', () => {
+        modal.style.display = 'none';
+        log(`\n--- [${equipConfigs[currentEquip].title}] ---`);
+
+        switch(currentEquip) {
+            case 'furnace':
+                let time = parseFloat(document.getElementById('p-time').value);
+                let isWet = document.getElementById('p-gas').value === 'wet';
+                let oxThk = isWet ? time * 1.5 : time * 0.5; // 가짜 DG 모델
+                deposit('SiO2', oxThk);
+                break;
+            case 'pecvd':
+                deposit(document.getElementById('p-mat').value, parseFloat(document.getElementById('p-thk').value));
+                break;
+            case 'endura':
+                deposit(document.getElementById('p-mat').value, parseFloat(document.getElementById('p-thk').value));
+                break;
+            case 'track':
+                if (document.getElementById('p-op').value === 'coat') {
+                    // PR은 액체이므로 빈 공간(Trench)을 채우며 평탄화됨 (Planarization effect)
+                    // 현재 각 영역별 최고 높이 계산
+                    let maxH = 0; let curL = 0, curC = 0, curR = 0;
+                    waferStack.forEach(lyr => { curL += lyr.L; curC += lyr.C; curR += lyr.R; });
+                    maxH = Math.max(curL, curC, curR);
+                    // 목표 두께 60이라 치고, 낮은 곳은 더 두껍게 깔림
+                    waferStack.push({ mat: 'PR', L: (maxH - curL) + 60, C: (maxH - curC) + 60, R: (maxH - curR) + 60, expMask: null });
+                    log('PR Spin Coating (Planarization 적용됨).');
+                } else {
+                    // Develop
+                    let topPR = waferStack.find(l => l.mat === 'PR');
+                    if (topPR && topPR.expMask) {
+                        if (topPR.expMask === 'center') topPR.C = 0;
+                        if (topPR.expMask === 'edges') { topPR.L = 0; topPR.R = 0; }
+                        log('현상(Develop) 완료. 빛을 받은 영역 제거됨.');
+                        cleanEmptyLayers();
+                    } else {
+                        log('Warning: 노광되지 않은 PR이거나 PR이 없습니다.');
+                    }
+                }
+                break;
+            case 'stepper':
+                let prLayer = waferStack.slice().reverse().find(l => l.mat === 'PR');
+                if (!prLayer) { log('Error: PR 층이 없습니다.'); break; }
+                let mask = document.getElementById('p-mask').value;
+                // Positive PR 기준: 노광된 부분이 Develop시 날아감
+                prLayer.expMask = (mask === 'dark') ? 'center' : 'edges';
+                log(`노광 완료. Mask: ${mask} (Positive PR)`);
+                break;
+            case 'drie':
+                // Deep RIE: Bosch 공정. Si만 엄청 깊게 팜. (PR이나 Oxide는 버팀)
+                let dTime = parseFloat(document.getElementById('p-time').value);
+                let etchDepth = dTime * 3; // nm
+                // 각 영역별로 탑다운 식각
+                let topsDrie = getTopExposedMaterials();
+                if(topsDrie.L.startsWith('Si')) etchRegion('L', 'Si_Deep', etchDepth, true);
+                if(topsDrie.C.startsWith('Si')) etchRegion('C', 'Si_Deep', etchDepth, true);
+                if(topsDrie.R.startsWith('Si')) etchRegion('R', 'Si_Deep', etchDepth, true);
+                log(`Deep RIE 진행. Si Trench 깊이 최대 ${etchDepth}nm 식각.`);
+                break;
+            case 'rie':
+                let rTarget = document.getElementById('p-target').value;
+                let rAmt = parseFloat(document.getElementById('p-amt').value);
+                // RIE는 지향성(Anisotropic). 
+                let topsRie = getTopExposedMaterials();
+                // PR이 없는 곳 중 타겟 물질과 일치하는 곳만 식각
+                if(topsRie.L === rTarget) etchRegion('L', rTarget, rAmt, true);
+                if(topsRie.C === rTarget) etchRegion('C', rTarget, rAmt, true);
+                if(topsRie.R === rTarget) etchRegion('R', rTarget, rAmt, true);
+                log(`RIE 진행. ${rTarget} 목표 ${rAmt}nm 식각.`);
+                break;
+            case 'wet_etch':
+                let wEtchant = document.getElementById('p-etchant').value;
+                let wTarget = (wEtchant === 'BOE') ? 'SiO2' : 'Al';
+                // Wet은 등방성이지만 여기선 간략화하여 위에서 깎음 (추가로 PR 아래 약간 파먹는 효과 생략)
+                let topsWet = getTopExposedMaterials();
+                if(topsWet.L === wTarget) etchRegion('L', wTarget, 1000, false); // 충분히 큰 값 (다 날림)
+                if(topsWet.C === wTarget) etchRegion('C', wTarget, 1000, false);
+                if(topsWet.R === wTarget) etchRegion('R', wTarget, 1000, false);
+                log(`Wet Bath(${wEtchant}) 진행. 노출된 ${wTarget} 제거됨.`);
+                break;
+            case 'asher':
+                waferStack.forEach(l => { if(l.mat === 'PR') { l.L=0; l.C=0; l.R=0; } });
+                log('O2 Asher: 모든 PR 제거(Strip) 완료.');
+                break;
+            case 'implanter':
+                let dopant = document.getElementById('p-dop').value;
+                let newSi = dopant === 'n' ? 'Si-n' : 'Si-p';
+                // 노출된 가장 위층이 Si면 도핑
+                let topsImp = getTopExposedMaterials();
+                if(topsImp.L === 'Si') { let target = waferStack.find(l=>l.L>0 && l.mat==='Si'); if(target) target.mat = newSi; }
+                if(topsImp.C === 'Si') { let target = waferStack.find(l=>l.C>0 && l.mat==='Si'); if(target) target.mat = newSi; }
+                if(topsImp.R === 'Si') { let target = waferStack.find(l=>l.R>0 && l.mat==='Si'); if(target) target.mat = newSi; }
+                log(`이온 주입 완료. 노출된 Si 영역이 ${newSi}로 도핑됨.`);
+                break;
+            case 'wet_clean':
+                log('SPM Clean 진행. 표면 파티클 및 유기물 제거.');
+                break;
+        }
+        
+        cleanEmptyLayers();
+        drawMetrology();
+    });
+
+    // 영역별 최상단 노출 물질 찾기 헬퍼
+    function getTopExposedMaterials() {
+        let res = { L: null, C: null, R: null };
+        for (let i = waferStack.length - 1; i >= 0; i--) {
+            if (!res.L && waferStack[i].L > 0) res.L = waferStack[i].mat;
+            if (!res.C && waferStack[i].C > 0) res.C = waferStack[i].mat;
+            if (!res.R && waferStack[i].R > 0) res.R = waferStack[i].mat;
+        }
+        return res;
+    }
+
+    // --- 시각화 렌더링 (2.5D Cross-Section) ---
+    function drawMetrology() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cw = canvas.width; const ch = canvas.height;
+        const colW = cw / 3;
+        
+        // 시각적 스케일 조절 (너무 두꺼워지면 화면 넘어감)
+        let maxTotalThk = 0;
+        let curL = 0, curC = 0, curR = 0;
+        waferStack.forEach(l => { curL += l.L; curC += l.C; curR += l.R; });
+        maxTotalThk = Math.max(curL, curC, curR);
+        let scale = Math.min(1.0, 200 / maxTotalThk); // 화면에 맞게 압축
+        
+        // Base 시작점 (Canvas는 Y축이 아래로 증가)
+        let yL = ch - 20; let yC = ch - 20; let yR = ch - 20;
+
+        // 아래에서 위로(Stack) 그리며 올라감
+        waferStack.forEach(layer => {
+            ctx.fillStyle = materials[layer.mat].color || '#fff';
+            ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
+
+            if (layer.L > 0) {
+                let h = layer.L * scale;
+                ctx.fillRect(0, yL - h, colW, h);
+                ctx.strokeRect(0, yL - h, colW, h);
+                yL -= h;
+            }
+            if (layer.C > 0) {
+                let h = layer.C * scale;
+                // Trench 효과를 위해 좌우 경계면에 약간의 여백/선을 주어 입체감
+                ctx.fillRect(colW, yC - h, colW, h);
+                ctx.strokeRect(colW, yC - h, colW, h);
+                yC -= h;
+            }
+            if (layer.R > 0) {
+                let h = layer.R * scale;
+                ctx.fillRect(colW * 2, yR - h, colW, h);
+                ctx.strokeRect(colW * 2, yR - h, colW, h);
+                yR -= h;
+            }
+        });
+        
+        // 격자 가이드라인 (심미성)
+        ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for(let i=0; i<cw; i+=20) { ctx.moveTo(i,0); ctx.lineTo(i,ch); }
+        for(let j=0; j<ch; j+=20) { ctx.moveTo(0,j); ctx.lineTo(cw,j); }
+        ctx.stroke();
+    }
+
+    // 초기화 렌더링
+    drawMetrology();
+</script>
+</body>
+</html>

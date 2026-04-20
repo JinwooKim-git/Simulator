@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jinwoo's Semi-Conductor Lab</title>
+    <style>
+        body {
+            margin: 0; padding: 0;
+            background-color: #121215; color: white;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh;
+        }
+        h1 { color: #4da8da; margin-bottom: 40px; font-weight: 300; letter-spacing: 2px; }
+        .container { display: flex; gap: 30px; }
+        .card {
+            width: 300px; padding: 30px;
+            background: #1e1e24; border: 1px solid #333; border-radius: 15px;
+            text-align: center; cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none; color: white;
+        }
+        .card:hover {
+            transform: translateY(-10px);
+            border-color: #4da8da;
+            box-shadow: 0 10px 30px rgba(77, 168, 218, 0.3);
+        }
+        .icon { font-size: 50px; margin-bottom: 20px; }
+        .title { font-size: 1.5rem; font-weight: bold; margin-bottom: 15px; display: block; }
+        .desc { color: #888; font-size: 0.9rem; line-height: 1.5; }
+    </style>
+</head>
+<body>
+
+    <h1>Jinwoo's Virtual Lab</h1>
+
+    <div class="container">
+        <a href="DRAM_Simulation_Final.html" class="card">
+            <div class="icon">💾</div>
+            <span class="title">1T1C DRAM Simulator</span>
+            <p class="desc">회로 동작과 에너지 밴드 다이어그램의 유기적 연결을 시뮬레이션합니다.</p>
+        </a>
+
+        <a href="Free_Fab_Sandbox.html" class="card">
+            <div class="icon">🏗️</div>
+            <span class="title">Fab Sandbox</span>
+            <p class="desc">ISRC 장비 기반의 자유 공정을 통해 나만의 반도체 소자를 제작해봅니다.</p>
+        </a>
+    </div>
+
+</body>
+</html>
