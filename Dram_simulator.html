@@ -3,17 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DRAM 1T1C Refresh & Band Simulator</title>
+    <title>DRAM 1T1C Physics Simulator</title>
     <style>
         body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121215; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
         #app-container { width: 900px; height: 600px; position: relative; background-color: #1a1a20; border: 1px solid #333; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.8); overflow: hidden; margin-bottom: 20px; }
         h2 { text-align: center; margin-top: 10px; margin-bottom: 20px; color: #e0e0e0; font-weight: 400; }
         
         /* 상태 대시보드 */
-        #status-dashboard { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); background: rgba(20, 20, 25, 0.85); border: 1px solid #444; padding: 10px 25px; border-radius: 8px; z-index: 50; display: flex; gap: 30px; font-family: 'Courier New', Courier, monospace; box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-size: 1rem; }
-        .status-item { display: flex; flex-direction: column; align-items: center; min-width: 100px;}
-        .status-label { font-size: 0.8rem; color: #aaa; margin-bottom: 4px; }
-        .status-value { font-weight: bold; }
+        #status-dashboard { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); background: rgba(20, 20, 25, 0.9); border: 1px solid #444; padding: 10px 25px; border-radius: 8px; z-index: 50; display: flex; gap: 20px; font-family: 'Courier New', Courier, monospace; box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-size: 0.95rem; align-items: center; justify-content: center; width: 85%;}
+        .status-item { display: flex; flex-direction: column; align-items: center; min-width: 120px; flex: 1;}
+        .status-label { font-size: 0.75rem; color: #aaa; margin-bottom: 4px; }
+        .status-value { font-weight: bold; text-align: center;}
         
         .view-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: all 0.6s ease-in-out; }
         
@@ -49,21 +49,21 @@
 </head>
 <body>
 
-<h2>1T1C DRAM 종합 시뮬레이터 (Refresh & 에너지 밴드)</h2>
+<h2>1T1C DRAM 정밀 물리 시뮬레이터</h2>
 
 <div id="app-container">
     <div id="status-dashboard">
         <div class="status-item">
-            <span class="status-label">Charge Level</span>
-            <span class="status-value" id="charge-text" style="color: #4da8da; font-size: 1.2rem;">0%</span>
+            <span class="status-label">Capacitor Charge</span>
+            <span class="status-value" id="charge-text" style="color: #4da8da; font-size: 1.3rem;">0%</span>
         </div>
         <div class="status-item">
             <span class="status-label">Data State</span>
             <span class="status-value" id="data-state" style="color: #888;">EMPTY / '0'</span>
         </div>
-        <div class="status-item">
-            <span class="status-label">Leakage</span>
-            <span class="status-value" style="color: #ff4757;">Active (-0.05%/fr)</span>
+        <div class="status-item" style="border-left: 1px solid #555; padding-left: 20px;">
+            <span class="status-label">Current Operation Mode</span>
+            <span class="status-value" id="op-mode" style="color: #ff4757;">-</span>
         </div>
     </div>
 
@@ -110,6 +110,7 @@
     
     const chargeText = document.getElementById('charge-text');
     const dataState = document.getElementById('data-state');
+    const opMode = document.getElementById('op-mode');
 
     const circuitCtx = document.getElementById('circuitCanvas').getContext('2d');
     const bandCtx = document.getElementById('bandCanvas').getContext('2d');
@@ -119,7 +120,6 @@
         particles: [], bandParticles: []
     };
 
-    // UI 업데이트
     function updateState() {
         state.wl = parseFloat(wlSlider.value);
         state.bl = parseFloat(blSlider.value);
@@ -129,12 +129,8 @@
     wlSlider.addEventListener('input', updateState);
     blSlider.addEventListener('input', updateState);
 
-    // 리프레시 버튼 로직
-    document.getElementById('refresh-btn').addEventListener('click', () => {
-        state.charge = 100; // 강제 풀충전
-    });
+    document.getElementById('refresh-btn').addEventListener('click', () => { state.charge = 100; });
 
-    // 뷰 전환
     mosfetHitbox.addEventListener('click', () => {
         state.view = 'band';
         circuitView.style.transform = 'scale(3)'; circuitView.style.opacity = '0'; circuitView.style.pointerEvents = 'none';
@@ -146,23 +142,27 @@
         circuitView.style.transform = 'scale(1)'; circuitView.style.opacity = '1'; circuitView.style.pointerEvents = 'auto';
     });
 
-    // --- 회로 입자 클래스 ---
     class CircuitParticle {
-        constructor() { this.progress = 0; this.speed = 0.015 + Math.random() * 0.01; }
+        constructor(isDischarging = false) { 
+            this.progress = 0; this.speed = 0.02 + Math.random() * 0.01; 
+            this.isDischarging = isDischarging;
+        }
         update() { this.progress += this.speed; }
         getPos() {
-            if (this.progress < 0.3) return { x: 300, y: 100 + (this.progress / 0.3) * 200 };
-            else if (this.progress < 0.7) return { x: 300 + ((this.progress - 0.3) / 0.4) * 300, y: 300 };
-            else return { x: 600, y: 300 + ((this.progress - 0.7) / 0.3) * 150 };
+            let p = this.progress;
+            if (this.isDischarging) { p = 1 - p; } // 방전일 경우 반대 방향으로 이동
+            
+            if (p < 0.3) return { x: 300, y: 100 + (p / 0.3) * 200 };
+            else if (p < 0.7) return { x: 300 + ((p - 0.3) / 0.4) * 300, y: 300 };
+            else return { x: 600, y: 300 + ((p - 0.7) / 0.3) * 150 };
         }
     }
 
-    // --- 밴드 입자 클래스 ---
     class BandParticle {
-        constructor(x, getEcYFunc) {
-            this.x = x; this.getEcY = getEcYFunc;
+        constructor(x, getEcYFunc, direction = 1) {
+            this.x = x; this.getEcY = getEcYFunc; this.direction = direction;
             this.y = this.getEcY(this.x) - 10 - Math.random() * 10;
-            this.speed = 3 + Math.random() * 3;
+            this.speed = (3 + Math.random() * 3) * direction;
         }
         update() {
             this.x += this.speed;
@@ -179,31 +179,27 @@
         if (state.view !== 'circuit') return;
         circuitCtx.clearRect(0, 0, 900, 600);
 
-        // 1. 배선 (온전하게 복구)
+        // 배선
         circuitCtx.strokeStyle = '#888'; circuitCtx.lineWidth = 4; circuitCtx.lineCap = 'round';
         circuitCtx.beginPath();
-        circuitCtx.moveTo(300, 100); circuitCtx.lineTo(300, 300); // BL to Drain
-        circuitCtx.moveTo(600, 300); circuitCtx.lineTo(600, 450); // Source to Capacitor
-        circuitCtx.moveTo(100, 320); circuitCtx.lineTo(400, 320); // WL to Gate
+        circuitCtx.moveTo(300, 100); circuitCtx.lineTo(300, 300); 
+        circuitCtx.moveTo(600, 300); circuitCtx.lineTo(600, 450); 
+        circuitCtx.moveTo(100, 320); circuitCtx.lineTo(400, 320); 
         circuitCtx.stroke();
 
-        // 2. 캐패시터 및 그라운드 (온전하게 복구)
+        // 캐패시터 & Ground
         circuitCtx.strokeStyle = '#fff'; circuitCtx.beginPath();
         circuitCtx.moveTo(550, 450); circuitCtx.lineTo(650, 450);
         circuitCtx.moveTo(550, 480); circuitCtx.lineTo(650, 480);
-        circuitCtx.moveTo(600, 480); circuitCtx.lineTo(600, 530); // Ground 연결
+        circuitCtx.moveTo(600, 480); circuitCtx.lineTo(600, 530); 
         circuitCtx.moveTo(570, 530); circuitCtx.lineTo(630, 530);
         circuitCtx.moveTo(585, 540); circuitCtx.lineTo(615, 540);
         circuitCtx.moveTo(595, 550); circuitCtx.lineTo(605, 550);
         circuitCtx.stroke();
 
-        // 3. 라벨링
         circuitCtx.fillStyle = '#fff'; circuitCtx.font = '18px Arial';
-        circuitCtx.fillText('BL (Drain)', 260, 80);
-        circuitCtx.fillText('WL (Gate)', 100, 300);
-        circuitCtx.fillText('Capacitor', 670, 470);
+        circuitCtx.fillText('BL (Drain)', 260, 80); circuitCtx.fillText('WL (Gate)', 100, 300); circuitCtx.fillText('Capacitor', 670, 470);
 
-        // 4. MOSFET 기호
         let isON = state.wl >= state.vTh;
         circuitCtx.strokeStyle = isON ? '#2ed573' : '#ff4757'; 
         circuitCtx.beginPath();
@@ -213,43 +209,53 @@
         circuitCtx.moveTo(400, 300); circuitCtx.lineTo(600, 300);
         circuitCtx.stroke();
         
-        circuitCtx.font = 'bold 16px Arial';
-        if (isON) { circuitCtx.fillStyle = '#2ed573'; circuitCtx.fillText(`[ ON ] 장벽 하강`, 375, 250); } 
-        else { circuitCtx.fillStyle = '#ff4757'; circuitCtx.fillText(`[ OFF ] 장벽 차단`, 370, 250); }
-
-        // --- 핵심 물리 로직: 누설(Leakage)과 충전 ---
-        // 매 프레임 미세하게 전하 감소 (자연 방전)
-        if (state.charge > 0) state.charge -= 0.05;
-        if (state.charge < 0) state.charge = 0;
-
+        // --- 물리 로직 분리 ---
         let maxChargeForBL = (state.bl / 3.0) * 100;
         
-        if (isON && state.bl > 0 && state.charge < maxChargeForBL) {
-            state.charge += 0.6; // 충전 (방전 속도보다 빠름)
-            if (state.charge > maxChargeForBL) state.charge = maxChargeForBL;
-            if (Math.random() < 0.4) state.particles.push(new CircuitParticle());
-        } else if (isON && state.charge > maxChargeForBL) {
-            state.charge -= 0.5; // 방전 (BL 전압이 더 낮을 때)
+        if (!isON) {
+            // 1. OFF 상태: 자연 누설(Leakage)
+            if (state.charge > 0) state.charge -= 0.02; // 아주 느린 방전
+            opMode.innerHTML = `대기 상태<br><span style="color:#ffbe76; font-size:0.8rem;">(Sub-threshold Leakage)</span>`;
+            opMode.style.color = "#ffbe76";
+        } else {
+            // 2. ON 상태: Active Charge / Discharge
+            if (state.charge < maxChargeForBL - 1) {
+                // 충전 (BL 전압이 더 높음)
+                state.charge += 0.8;
+                opMode.innerHTML = `Write '1'<br><span style="color:#2ed573; font-size:0.8rem;">(Active Charging)</span>`;
+                opMode.style.color = "#2ed573";
+                if (Math.random() < 0.5) state.particles.push(new CircuitParticle(false));
+            } else if (state.charge > maxChargeForBL + 1) {
+                // 강제 방전 (BL 전압이 더 낮음, 예: BL=0)
+                state.charge -= 0.8;
+                opMode.innerHTML = `Write '0' / Read<br><span style="color:#ff4757; font-size:0.8rem;">(Active Discharging)</span>`;
+                opMode.style.color = "#ff4757";
+                if (Math.random() < 0.5) state.particles.push(new CircuitParticle(true));
+            } else {
+                // 전압 동기화 완료
+                opMode.innerHTML = `안정화 됨<br><span style="color:#aaa; font-size:0.8rem;">(Voltage Synced)</span>`;
+                opMode.style.color = "#aaa";
+            }
         }
+        if (state.charge < 0) state.charge = 0;
+        if (state.charge > 100) state.charge = 100;
 
-        // 충전량 시각화 (캐패시터 안쪽 채우기)
+        // 충전 시각화
         if (state.charge > 0) {
             circuitCtx.fillStyle = 'rgba(30, 144, 255, 0.6)';
             let fillHeight = (state.charge / 100) * 30;
             circuitCtx.fillRect(550, 480 - fillHeight, 100, fillHeight);
         }
 
-        // 대시보드 UI 업데이트
         chargeText.innerText = Math.round(state.charge) + "%";
         if (state.charge > 70) { dataState.innerText = "DATA '1' (안전)"; dataState.style.color = "#2ed573"; }
         else if (state.charge > 30) { dataState.innerText = "WEAKENING..."; dataState.style.color = "#ffbe76"; }
-        else if (state.charge > 5) { dataState.innerText = "DANGER (소실 위험)"; dataState.style.color = "#ff4757"; }
+        else if (state.charge > 5) { dataState.innerText = "DANGER (데이터 손실 위험)"; dataState.style.color = "#ff4757"; }
         else { dataState.innerText = "EMPTY / '0'"; dataState.style.color = "#888"; }
 
-        // 입자 렌더링
         for (let i = state.particles.length - 1; i >= 0; i--) {
             let p = state.particles[i]; p.update();
-            if (p.progress >= 1) state.particles.splice(i, 1);
+            if (p.progress >= 1 || p.progress <= 0) state.particles.splice(i, 1);
             else {
                 let pos = p.getPos();
                 circuitCtx.beginPath(); circuitCtx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
@@ -262,8 +268,7 @@
         if (state.view !== 'band') return;
         bandCtx.clearRect(0, 0, 900, 600);
 
-        const w = 900, h = 600;
-        const x1 = w * 0.25, x2 = w * 0.75;
+        const w = 900, h = 600; const x1 = w * 0.25, x2 = w * 0.75;
         const baseY = 250, maxBarrierHeight = 120, bandGap = 130, efOffset = 25;
 
         bandCtx.fillStyle = 'rgba(255, 255, 255, 0.02)';
@@ -272,8 +277,12 @@
         bandCtx.fillRect(x1, 0, x2 - x1, h);
 
         bandCtx.fillStyle = '#aaa'; bandCtx.font = '18px Arial'; bandCtx.textAlign = 'center';
-        bandCtx.fillText('Source', x1/2, 90); bandCtx.fillText('Channel', w/2, 90); bandCtx.fillText('Drain', w - (w-x2)/2, 90);
+        bandCtx.fillText('Source (Capacitor)', x1/2, 90); bandCtx.fillText('Channel', w/2, 90); bandCtx.fillText('Drain (Bit Line)', w - (w-x2)/2, 90);
 
+        // Cap Charge에 따른 Source 밴드 위치 변화 (충전될수록 전위는 높아지고 에너지는 낮아짐)
+        const sourceDrop = (state.charge / 100) * 50;
+        const sourceY = baseY + sourceDrop;
+        
         const drainDrop = state.bl * 50; 
         const drainY = baseY + drainDrop;
         
@@ -283,15 +292,19 @@
         let currentBarrierHeight = maxBarrierHeight * barrierRatio;
 
         const getEcY = (x, isOriginal = false) => {
+            let tSourceY = isOriginal ? baseY : sourceY;
             let tDrainY = isOriginal ? baseY : drainY;
             let tBarrier = isOriginal ? maxBarrierHeight : currentBarrierHeight;
-            if (x <= x1) return baseY;
+            
+            if (x <= x1) return tSourceY;
             if (x >= x2) return tDrainY;
+            
             let ratio = (x - x1) / (x2 - x1);
             const smoothstep = (t) => Math.max(0, Math.min(1, t)) * Math.max(0, Math.min(1, t)) * (3 - 2 * Math.max(0, Math.min(1, t)));
-            let channelStartY = baseY - tBarrier;
-            let channelEndY = channelStartY + (tDrainY - baseY) * 0.1;
-            if (ratio < 0.25) return baseY - smoothstep(ratio / 0.25) * tBarrier;
+            let channelStartY = baseY - tBarrier; // 장벽 높이는 기본 기준선 기준
+            let channelEndY = channelStartY + (tDrainY - tSourceY) * 0.1;
+            
+            if (ratio < 0.25) return tSourceY - smoothstep(ratio / 0.25) * (tSourceY - channelStartY);
             else if (ratio > 0.75) return channelEndY + smoothstep((ratio - 0.75) / 0.25) * (tDrainY - channelEndY);
             else return channelStartY + ((ratio - 0.25) / 0.5) * (channelEndY - channelStartY);
         };
@@ -303,65 +316,53 @@
             bandCtx.setLineDash(isDashed ? [8, 8] : []); bandCtx.stroke(); bandCtx.setLineDash([]);
         };
 
-        if (state.wl > 0 || state.bl > 0) {
+        if (state.wl > 0 || state.bl > 0 || state.charge > 0) {
             drawLine(0, 'rgba(255, 255, 255, 0.1)', 2, false, true);
             drawLine(bandGap, 'rgba(255, 255, 255, 0.1)', 2, false, true);
         }
 
         let isON = state.wl >= state.vTh;
         let bandColor = isON ? '#2ed573' : (state.wl > 0 ? '#ff4757' : '#ffffff');
-        drawLine(0, bandColor, 3);
-        drawLine(bandGap, bandColor, 3);
+        drawLine(0, bandColor, 3); drawLine(bandGap, bandColor, 3);
 
-        bandCtx.fillStyle = '#fff'; bandCtx.fillText('Ec', 30, baseY - 10); bandCtx.fillText('Ev', 30, baseY + bandGap - 10);
+        bandCtx.fillStyle = '#fff'; bandCtx.fillText('Ec', 30, sourceY - 10); bandCtx.fillText('Ev', 30, sourceY + bandGap - 10);
 
+        // Ef
         bandCtx.beginPath();
-        bandCtx.moveTo(0, baseY + efOffset); bandCtx.lineTo(x1, baseY + efOffset);
+        bandCtx.moveTo(0, sourceY + efOffset); bandCtx.lineTo(x1, sourceY + efOffset);
         bandCtx.moveTo(x2, drainY + efOffset); bandCtx.lineTo(w, drainY + efOffset);
         bandCtx.strokeStyle = '#aaa'; bandCtx.lineWidth = 1.5; bandCtx.setLineDash([5, 5]); bandCtx.stroke(); bandCtx.setLineDash([]);
-        bandCtx.fillStyle = '#aaa'; bandCtx.fillText('Ef', 30, baseY + efOffset + 15);
+        bandCtx.fillStyle = '#aaa'; bandCtx.fillText('Ef', 30, sourceY + efOffset + 15);
         if(state.bl > 0) bandCtx.fillText('Ef', w - 30, drainY + efOffset + 15);
 
+        // 전자
         const drawElecPyr = (cX, bY) => {
             let sY = bY - 15;
             const dE = (ex, ey) => {
                 bandCtx.beginPath(); bandCtx.arc(ex, ey, 7, 0, Math.PI*2);
                 bandCtx.fillStyle = '#000'; bandCtx.fill(); bandCtx.strokeStyle = '#fff'; bandCtx.lineWidth = 1.5; bandCtx.stroke();
             };
-            dE(cX-25, sY); dE(cX, sY); dE(cX+25, sY);
-            dE(cX-12.5, sY-20); dE(cX+12.5, sY-20); dE(cX, sY-40);
+            dE(cX-25, sY); dE(cX, sY); dE(cX+25, sY); dE(cX-12.5, sY-20); dE(cX+12.5, sY-20); dE(cX, sY-40);
         };
-        drawElecPyr(x1 / 2, baseY); drawElecPyr(w - (w - x2) / 2, drainY);
+        drawElecPyr(x1 / 2, sourceY); drawElecPyr(w - (w - x2) / 2, drainY);
 
-        if (state.wl > 0) {
-            let arrY = baseY - maxBarrierHeight + 20; let arrL = (state.wl / 3) * 40;
-            bandCtx.beginPath(); bandCtx.moveTo(w/2, arrY); bandCtx.lineTo(w/2, arrY + arrL);
-            bandCtx.moveTo(w/2 - 10, arrY + arrL - 10); bandCtx.lineTo(w/2, arrY + arrL); bandCtx.lineTo(w/2 + 10, arrY + arrL - 10);
-            bandCtx.strokeStyle = bandColor; bandCtx.lineWidth = 3; bandCtx.stroke();
-            
-            bandCtx.fillStyle = bandColor; bandCtx.font = 'bold 16px Arial';
-            if(isON) bandCtx.fillText(`ON 상태 (장벽 열림)`, w/2, arrY - 10);
-            else bandCtx.fillText(`OFF 상태 (장벽 막힘)`, w/2, arrY - 10);
+        if (isON) {
+            let maxChargeForBL = (state.bl / 3.0) * 100;
+            if (state.charge < maxChargeForBL - 1 && Math.random() < 0.6) {
+                state.bandParticles.push(new BandParticle(w - 20, getEcY, -1)); // BL -> Cap
+            } else if (state.charge > maxChargeForBL + 1 && Math.random() < 0.6) {
+                state.bandParticles.push(new BandParticle(20, getEcY, 1)); // Cap -> BL (방전)
+            }
         }
-
-        if (isON && state.bl > 0) {
-            if (Math.random() < 0.6) state.bandParticles.push(new BandParticle(x1 - 20, getEcY));
-        }
+        
         for (let i = state.bandParticles.length - 1; i >= 0; i--) {
             state.bandParticles[i].update(); state.bandParticles[i].draw(bandCtx);
-            if (state.bandParticles[i].x > w) state.bandParticles.splice(i, 1);
+            if (state.bandParticles[i].x > w || state.bandParticles[i].x < 0) state.bandParticles.splice(i, 1);
         }
     }
 
-    function animate() {
-        drawCircuit();
-        drawBand();
-        requestAnimationFrame(animate);
-    }
-    
-    updateState();
-    animate();
-
+    function animate() { drawCircuit(); drawBand(); requestAnimationFrame(animate); }
+    updateState(); animate();
 </script>
 </body>
 </html>
