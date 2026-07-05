@@ -175,10 +175,10 @@
 
     const equipConfigs = {
         'furnace': { title: 'Thermal Furnace', html: `<div class="form-group"><label>Process</label><select id="p-gas"><option value="dry">Dry Oxidation (O2)</option><option value="wet">Wet Oxidation (H2O)</option></select></div><div class="form-group"><label>Time (mins)</label><input type="number" id="p-time" value="60"></div><div class="helper-text">* 1000°C. 노출된 Si/Poly-Si에서만 성장 (Deal-Grove). Si 소모 = 0.44 × 성장 두께.</div>` },
-        'pecvd': { title: 'PECVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="SiO2">Silicon Dioxide (SiO2)</option><option value="SiNx">Silicon Nitride (SiNx)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="50"></div>` },
-        'lpcvd': { title: 'LPCVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="Poly-Si">Poly-Silicon (Poly-Si)</option><option value="SiNx">Silicon Nitride (Si3N4)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="40"></div><div class="helper-text">* Excellent Step Coverage</div>` },
-        'ald': { title: 'ALD (Atomic Layer Deposition)', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="HfO2">Hafnium Oxide (HfO2)</option><option value="Al2O3">Aluminum Oxide (Al2O3)</option></select></div><div class="form-group"><label>Cycles (Thickness)</label><input type="number" id="p-thk" value="10"></div><div class="helper-text">* Ultra-thin, precise High-k dielectrics</div>` },
-        'endura': { title: 'AMAT Endura 5500', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="Al">Aluminum (Al)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="100"></div>` },
+        'pecvd': { title: 'PECVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="SiO2">Silicon Dioxide (SiO2)</option><option value="SiNx">Silicon Nitride (SiNx)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="50"></div><div class="helper-text">* Step coverage 계수 0.6 — 단차 바닥은 얇게 증착</div>` },
+        'lpcvd': { title: 'LPCVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="Poly-Si">Poly-Silicon (Poly-Si)</option><option value="SiNx">Silicon Nitride (Si3N4)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="40"></div><div class="helper-text">* Excellent Step Coverage (계수 0.9)</div>` },
+        'ald': { title: 'ALD (Atomic Layer Deposition)', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="HfO2">Hafnium Oxide (HfO2)</option><option value="Al2O3">Aluminum Oxide (Al2O3)</option></select></div><div class="form-group"><label>Cycles (Thickness)</label><input type="number" id="p-thk" value="10"></div><div class="helper-text">* Ultra-thin, precise High-k dielectrics. 완전 컨포멀 (계수 1.0)</div>` },
+        'endura': { title: 'AMAT Endura 5500', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="Al">Aluminum (Al)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="100"></div><div class="helper-text">* PVD 스퍼터 — step coverage 계수 0.3 (비컨포멀)</div>` },
         'implanter': { title: 'Ion Implanter', html: `<div class="form-group"><label>Dopant</label><select id="p-dop"><option value="n">Phosphorus (N-type)</option><option value="p">Boron (P-type)</option></select></div>` },
         'track': { title: 'PR Track', html: `<div class="form-group"><label>Operation</label><select id="p-op"><option value="coat">Spin Coat</option><option value="dev">Develop</option></select></div>` },
         'stepper': { title: 'Nikon Stepper', html: `<div class="form-group"><label>Mask Type</label><select id="p-mask"><option value="dark">Trench/Hole (Exposes Center)</option><option value="clear">Line/Gate (Exposes Edges)</option></select></div>` },
@@ -219,8 +219,16 @@
             case 'pecvd': case 'lpcvd': case 'ald': case 'endura': {
                 const mat = document.getElementById('p-mat').value;
                 const thk = parseFloat(document.getElementById('p-thk').value);
-                wafer = FabPhysics.deposit(wafer, mat, thk);
-                log(`${mat} ${thk}nm 증착 완료.`);
+                const covKey = (currentEquip === 'endura') ? 'pvd' : currentEquip;
+                const cov = FabPhysics.STEP_COVERAGE[covKey];
+                const rep = FabPhysics.depositReport(wafer, thk, cov);
+                wafer = FabPhysics.deposit(wafer, mat, thk, cov);
+                if (rep.L === rep.C && rep.C === rep.R) {
+                    log(`${mat} ${thk}nm 증착 완료. (step coverage ${cov})`);
+                } else {
+                    log(`${mat} 증착 완료 — step coverage ${cov}:`);
+                    FabPhysics.COLS.forEach(c => log(`&nbsp;&nbsp;[${c}] ${rep[c].toFixed(1)}nm ${rep[c] < thk ? '(트렌치 바닥 — 박막화)' : ''}`));
+                }
                 break;
             }
             case 'track':

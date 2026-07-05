@@ -1,9 +1,10 @@
 // FabPhysics — Virtual Fab 상태 전이 순수 함수 모듈 (UMD-lite, 브라우저/Node 겸용)
 //
 // Phase 0에서 구조 분리, Phase 1에서 물리를 순차 교정 중.
-// 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1 / G4 식각 선택비·언더컷 — Phase 1-2.
-// 잔여 갭(G2 implant 마스킹, G3 conformality)은 characterization 테스트가
-// 현재 동작을 고정하고 있으며, 각 교정 PR에서 물리 기대값 테스트로 교체된다.
+// 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1 / G4 식각 선택비·언더컷 — Phase 1-2 /
+// G3 증착 conformality — Phase 1-3.
+// 잔여 갭(G2 implant 마스킹)은 characterization 테스트가 현재 동작을 고정하고
+// 있으며, 교정 PR에서 물리 기대값 테스트로 교체된다.
 //
 // 데이터 모델 (b): 컬럼별 완전 독립 스택 (2026-07-05 소유자 승인)
 //   wafer = {
@@ -76,14 +77,42 @@
     return w;
   }
 
-  // --- 증착 ---
+  // --- 증착 (Phase 1-3, G3 교정: PHYSICS_REVIEW 1.3) ---
+  //
+  // step coverage = (트렌치 바닥 두께) / (상면 두께). 표면 반응율속(ALD, LPCVD)일수록
+  // 컨포멀 ≈ 1, 도달 플럭스 지배(PVD 스퍼터)일수록 낮다. 종횡비 의존은 Phase 4(C6).
+  // TODO(REVIEW): 장비별 잠정 계수 (정성 근사, PHYSICS_REVIEW 1.3 / CLAUDE.md 8절)
+  const STEP_COVERAGE = {
+    ald: 1.0,
+    lpcvd: 0.9,
+    pecvd: 0.6,
+    pvd: 0.3 // Endura 스퍼터
+  };
 
-  // TODO(REVIEW): G3 특성 보존 — 모든 증착 장비가 단차와 무관하게 전 컬럼 균일 증착.
-  // Phase 1-3에서 장비별 step coverage 계수를 도입한다.
-  function deposit(wafer, mat, thk) {
+  // 증착: 단차(컬럼 간 높이차)가 있으면 낮은 컬럼(트렌치 바닥)에는 coverage × thk만
+  // 증착된다. 단차가 없으면 전 컬럼 균일. coverage 생략 시 1.0 (완전 컨포멀).
+  function deposit(wafer, mat, thk, coverage) {
+    const cov = (coverage === undefined) ? 1.0 : coverage;
     const w = cloneWafer(wafer);
-    COLS.forEach(function (c) { w.cols[c].push({ mat: mat, thk: thk }); });
+    const h = heights(w);
+    const maxH = Math.max(h.L, h.C, h.R);
+    COLS.forEach(function (c) {
+      const isRecessed = h[c] < maxH; // 트렌치 바닥
+      const t = isRecessed ? thk * cov : thk;
+      if (t > 0) w.cols[c].push({ mat: mat, thk: t });
+    });
+    // 반환형은 Phase 0과 동일하게 wafer — 컬럼별 증착량은 depositReport로 제공
     return w;
+  }
+
+  // 컬럼별 증착량 보고가 필요한 호출자용 (UI 로그). deposit과 동일 규칙.
+  function depositReport(wafer, thk, coverage) {
+    const cov = (coverage === undefined) ? 1.0 : coverage;
+    const h = heights(wafer);
+    const maxH = Math.max(h.L, h.C, h.R);
+    const rep = {};
+    COLS.forEach(function (c) { rep[c] = (h[c] < maxH) ? thk * cov : thk; });
+    return rep;
   }
 
   // --- 열산화 (Phase 1-1, G1 교정: PHYSICS_REVIEW 1.1) ---
@@ -229,9 +258,9 @@
   // 인접 컬럼의 마스크 아래 동일 재질 층에 undercut을 annotation으로 기록한다 —
   // 컬럼 두께 배열은 건드리지 않는다 (3컬럼 모델 한계 존중, PROCESS_CHALLENGES 설계 원칙).
 
-  // TODO(REVIEW): 재질쌍 선택비 잠정 테이블 (일반 문헌 수준, 전부 승인 대상).
+  // 재질쌍 선택비 테이블 — 2026-07-06 소유자 승인 (교육용 방향·자릿수 기준).
   // RIE는 타깃 선택이 곧 화학 선택: SiO2 타깃 = CHF3계 (SiO2:Si 8, SiO2:PR 4),
-  // Si/Poly 타깃 = CF4/O2계 (Si:SiO2 2). 미정의 쌍은 DEFAULT 10.
+  // Si/Poly 타깃 = CF4/O2계 (Si:SiO2 2). 미정의 쌍은 DEFAULT 10 (승인 포함).
   const SELECTIVITY = {
     rie: {
       'SiO2': { 'Si': 8, 'Si-n': 8, 'Si-p': 8, 'Poly-Si': 8, 'PR': 4 },
@@ -242,7 +271,7 @@
     },
     drie: { 'SiO2': 50 } // Bosch, Si:SiO2 ≥ 50:1. 그 외 하부막은 정지(Infinity).
   };
-  const DEFAULT_SELECTIVITY = 10; // TODO(REVIEW)
+  const DEFAULT_SELECTIVITY = 10; // 2026-07-06 승인
 
   const SI_FAMILY = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
 
@@ -390,6 +419,8 @@
     topExposed: topExposed,
     normalize: normalize,
     deposit: deposit,
+    depositReport: depositReport,
+    STEP_COVERAGE: STEP_COVERAGE,
     OXIDATION: OXIDATION,
     oxidize: oxidize,
     SELECTIVITY: SELECTIVITY,
