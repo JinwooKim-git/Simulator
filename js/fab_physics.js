@@ -2,8 +2,9 @@
 //
 // Phase 0에서 구조 분리, Phase 1에서 물리를 순차 교정 중.
 // 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1 / G4 식각 선택비·언더컷 — Phase 1-2 /
-// G3 증착 conformality — Phase 1-3 / G2 implant 마스킹+깊이 — Phase 1-4.
-// Fab의 [E]급 물리 갭(G1~G4)은 모두 교정됨. 다음: 1-5 온도 규칙, 1-6 Metrology.
+// G3 증착 conformality — Phase 1-3 / G2 implant 마스킹+깊이 — Phase 1-4 /
+// L1 공정 순서 열예산 규칙 — Phase 1-5.
+// Fab의 [E]급 물리 갭(G1~G4)은 모두 교정됨. 다음: 1-6 Metrology 보강.
 //
 // 데이터 모델 (b): 컬럼별 완전 독립 스택 (2026-07-05 소유자 승인)
 //   wafer = {
@@ -393,6 +394,34 @@
     return { wafer: w, target: target, undercuts: undercuts, etched: etched };
   }
 
+  // --- 공정 순서 열예산 규칙 (Phase 1-5, L1: PHYSICS_REVIEW 1.5) ---
+  //
+  // 개별 공정이 다 맞아도 순서가 틀리면 소자가 죽는다 — 공정 통합의 제1 감각.
+  // 웨이퍼에 존재하는 재료의 최대 허용온도 < 장비 공정온도면 위반을 보고한다.
+  // 기본 동작은 경고 후 진행 (차단 여부는 소유자 결정 사항 — PHYSICS_REVIEW 1.5).
+  // TODO(REVIEW): 온도 테이블 전체 (PR 130°C는 하드베이크 전 근사, Al 450°C는
+  // 융점 660°C 대비 힐락/스파이크 여유를 둔 공정 한계)
+  const MATERIAL_TEMP_LIMIT = { PR: 130, Al: 450 }; // °C — 기타 재료는 제한 없음
+  const EQUIP_TEMP = { furnace: 1000, lpcvd: 600, pecvd: 300, ald: 250 }; // °C — 그 외 ~실온
+  const ROOM_TEMP = 25;
+
+  // 순수 함수: 위반 목록 반환. { equipTemp, violations: [{mat, limit, equipTemp}] }
+  function checkThermalBudget(wafer, equipId) {
+    const t = (EQUIP_TEMP[equipId] !== undefined) ? EQUIP_TEMP[equipId] : ROOM_TEMP;
+    const violations = [];
+    const seen = {};
+    COLS.forEach(function (c) {
+      wafer.cols[c].forEach(function (l) {
+        const limit = MATERIAL_TEMP_LIMIT[l.mat];
+        if (l.thk > 0 && limit !== undefined && t > limit && !seen[l.mat]) {
+          seen[l.mat] = true;
+          violations.push({ mat: l.mat, limit: limit, equipTemp: t });
+        }
+      });
+    });
+    return { equipTemp: t, violations: violations };
+  }
+
   // --- 이온주입 (Phase 1-4, G2 교정: PHYSICS_REVIEW 1.2) ---
   //
   // G2 버그(한 컬럼만 노출돼도 전 컬럼 도핑) 교정: 컬럼별 독립 스택 모델 위에서
@@ -461,6 +490,9 @@
     deepEtch: deepEtch,
     wetEtch: wetEtch,
     D_IMPLANT: D_IMPLANT,
-    implant: implant
+    implant: implant,
+    MATERIAL_TEMP_LIMIT: MATERIAL_TEMP_LIMIT,
+    EQUIP_TEMP: EQUIP_TEMP,
+    checkThermalBudget: checkThermalBudget
   };
 });
