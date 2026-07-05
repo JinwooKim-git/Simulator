@@ -105,6 +105,21 @@
             <div id="legend"></div>
         </div>
         
+        <div class="panel-box">
+            <h3>Process History (측정 이력)</h3>
+            <div id="history-wrap" style="max-height: 140px; overflow-y: auto;">
+                <table id="history-table" style="width:100%; border-collapse: collapse; font-size: 0.72rem; font-family: monospace;">
+                    <thead>
+                        <tr style="color:#4da8da; text-align:left; position:sticky; top:0; background:#1a1a20;">
+                            <th style="padding:2px 4px;">#</th><th>장비</th><th>파라미터</th>
+                            <th>L/C/R (nm)</th><th>Step H</th><th>Target Δ</th><th>편차</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body"></tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="panel-box" style="flex-grow: 1;">
             <h3>Process Log</h3>
             <div id="log-area">
@@ -118,6 +133,11 @@
         <div class="modal-content">
             <h3 id="modal-title">Equipment Setup</h3>
             <div id="modal-body"></div>
+            <div class="form-group" style="border-top: 1px dashed #444; padding-top: 12px;">
+                <label>Target 높이 변화 (nm, 선택)</label>
+                <input type="number" id="p-goal" placeholder="비워두면 편차 미표시">
+                <div class="helper-text">실행 후 컬럼별 실제 변화량과의 편차를 측정 이력에 표시합니다.</div>
+            </div>
             <button class="btn-run" id="btn-run">RUN PROCESS</button>
             <button class="btn-cancel" id="btn-cancel">Cancel</button>
         </div>
@@ -196,7 +216,37 @@
         currentEquip = equipId;
         document.getElementById('modal-title').innerText = equipConfigs[equipId].title;
         modalBody.innerHTML = equipConfigs[equipId].html;
+        document.getElementById('p-goal').value = '';
         modal.style.display = 'flex';
+    }
+
+    // --- 측정 이력 (Phase 1-6) ---
+    let stepCount = 0;
+    function paramsSummary() {
+        return Array.from(modalBody.querySelectorAll('input, select'))
+            .map(el => `${el.id.replace('p-', '')}=${el.value}`).join(' ');
+    }
+    function addHistoryRow(equipTitle, params, m, delta, goal) {
+        stepCount++;
+        const fmt = (v) => Math.round(v * 10) / 10;
+        let goalCell = '—', devCell = '—';
+        if (goal !== null && !isNaN(goal)) {
+            goalCell = `${goal}`;
+            devCell = FabPhysics.COLS.map(c => {
+                const dev = fmt(Math.abs(delta[c]) - goal);
+                const color = Math.abs(dev) <= goal * 0.05 ? '#2ed573' : '#ff4757';
+                return `<span style="color:${color}">${dev >= 0 ? '+' : ''}${dev}</span>`;
+            }).join('/');
+        }
+        document.getElementById('history-body').insertAdjacentHTML('beforeend',
+            `<tr style="border-top:1px solid #2a2a33;">
+                <td style="padding:2px 4px;">${stepCount}</td><td>${equipTitle}</td>
+                <td style="color:#888;">${params}</td>
+                <td>${fmt(m.heights.L)}/${fmt(m.heights.C)}/${fmt(m.heights.R)}</td>
+                <td>${fmt(m.stepHeight)}</td><td>${goalCell}</td><td>${devCell}</td>
+            </tr>`);
+        const wrap = document.getElementById('history-wrap');
+        wrap.scrollTop = wrap.scrollHeight;
     }
 
     document.getElementById('btn-cancel').addEventListener('click', () => modal.style.display = 'none');
@@ -204,11 +254,17 @@
     document.getElementById('btn-run').addEventListener('click', () => {
         modal.style.display = 'none'; log(`\n--- [${equipConfigs[currentEquip].title}] ---`);
 
-        // 열예산 검사 (Phase 1-5, L1): 위반 시 경고 후 진행
+        // 열예산 검사 (Phase 1-5, L1): 위반 시 경고 후 진행 (2026-07-06 확정)
         const tb = FabPhysics.checkThermalBudget(wafer, currentEquip);
         tb.violations.forEach(v => logWarn(
             `⚠ THERMAL BUDGET 위반: ${v.mat} (한계 ${v.limit}°C)가 ${v.equipTemp}°C 공정에 노출 — 소자 손상 위험! (경고 후 진행)`
         ));
+
+        // 측정 이력용 스텝 전 상태 (Phase 1-6)
+        const preHeights = FabPhysics.heights(wafer);
+        const runParams = paramsSummary();
+        const goalStr = document.getElementById('p-goal').value;
+        const goal = goalStr === '' ? null : parseFloat(goalStr);
 
         switch(currentEquip) {
             case 'furnace': {
@@ -297,6 +353,16 @@
             case 'wet_clean': log('SPM Clean 진행.'); break;
         }
         wafer = FabPhysics.normalize(wafer);
+
+        // 측정 (Phase 1-6): 컬럼별 총두께·step height·변화량 → 이력 테이블 + 로그
+        const m = FabPhysics.measure(wafer);
+        const delta = FabPhysics.heightDelta(preHeights, m.heights);
+        addHistoryRow(equipConfigs[currentEquip].title, runParams, m, delta, goal);
+        log(`측정: L ${m.heights.L.toFixed(1)} / C ${m.heights.C.toFixed(1)} / R ${m.heights.R.toFixed(1)} nm · step height ${m.stepHeight.toFixed(1)}nm`);
+        if (goal !== null && !isNaN(goal)) {
+            const devs = FabPhysics.COLS.map(c => `[${c}] ${(Math.abs(delta[c]) - goal) >= 0 ? '+' : ''}${(Math.abs(delta[c]) - goal).toFixed(1)}`).join(' ');
+            log(`&nbsp;&nbsp;target Δh ${goal}nm 대비 편차: ${devs}`);
+        }
         drawMetrology();
     });
 
@@ -340,6 +406,20 @@
         for(let i=0; i<canvas.width; i+=20) { ctx.moveTo(i,0); ctx.lineTo(i,canvas.height); }
         for(let j=0; j<canvas.height; j+=20) { ctx.moveTo(0,j); ctx.lineTo(canvas.width,j); }
         ctx.stroke();
+
+        // nm 스케일 바 (Phase 1-6): auto-scale 뷰에 절대 스케일 기준 제공
+        const nice = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+        let barNm = nice[0];
+        for (const v of nice) if (v * scale <= 120) barNm = v;
+        const barPx = barNm * scale;
+        const by = canvas.height - 7;
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath();
+        ctx.moveTo(8, by); ctx.lineTo(8 + barPx, by);
+        ctx.moveTo(8, by - 4); ctx.lineTo(8, by + 3);
+        ctx.moveTo(8 + barPx, by - 4); ctx.lineTo(8 + barPx, by + 3);
+        ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = '11px monospace';
+        ctx.fillText(`${barNm} nm`, 14 + barPx, by + 3);
     }
     drawMetrology();
 </script>
