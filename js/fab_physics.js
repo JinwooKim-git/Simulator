@@ -1,9 +1,9 @@
 // FabPhysics — Virtual Fab 상태 전이 순수 함수 모듈 (UMD-lite, 브라우저/Node 겸용)
 //
-// Phase 0: 기존 Fab_simulator.html의 동작을 그대로 보존한 채 구조만 분리했다.
-// 알려진 물리 갭(G1~G4)의 "잘못된" 동작도 의도적으로 유지한다 — characterization
-// 테스트(tests/fab_characterization.test.js)가 이 동작을 고정하고 있으며,
-// Phase 1의 각 교정 PR에서 해당 테스트와 함께 교체된다.
+// Phase 0에서 구조 분리, Phase 1에서 물리를 순차 교정 중.
+// 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1.
+// 잔여 갭(G2~G4)은 characterization 테스트가 현재 동작을 고정하고 있으며,
+// 각 교정 PR에서 물리 기대값 테스트로 교체된다.
 //
 // 데이터 모델 (b): 컬럼별 완전 독립 스택 (2026-07-05 소유자 승인)
 //   wafer = {
@@ -22,7 +22,6 @@
   const WET_TARGETS = { BOE: 'SiO2', PAN: 'Al' };
   const WET_ETCH_AMOUNT = 1000;      // 기존 동작: 노출된 타깃을 사실상 전량 제거
   const DEEP_ETCH_RATE = 3;          // nm/sec — 기존 동작: depth = time * 3
-  const FURNACE_RATE = 0.5;          // nm/min — 기존 동작: 선형 고정 성장률
   const PR_COAT_MARGIN = 60;         // planarization: 최고 높이 + 60nm
 
   function cloneWafer(wafer) {
@@ -82,12 +81,87 @@
     return w;
   }
 
-  // TODO(REVIEW): G1 특성 보존 — 열산화가 '증착'으로 구현되어 있다.
-  // 표면 재질과 무관하게 성장하고, Si를 소모하지 않으며, 성장률이 선형 고정.
-  // Phase 1-1에서 Deal-Grove(노출 Si에서만 성장, Si 0.44x 소모)로 교정한다.
-  function oxidizeFurnace(wafer, timeMin) {
-    const grown = timeMin * FURNACE_RATE;
-    return { wafer: deposit(wafer, 'SiO2', grown), grown: grown };
+  // --- 열산화 (Phase 1-1, G1 교정: PHYSICS_REVIEW 1.1) ---
+  //
+  // Deal-Grove 선형–포물선 모델: x² + A·x = B·(t + τ).
+  // 기존 산화막 x₀는 등가 시간 τ_eq = (x₀² + A·x₀)/B 로 반영 → 두꺼울수록 둔화.
+  // 성장은 노출된 Si 계열 표면(또는 그 위가 SiO2뿐인 Si)에서만 일어나고,
+  // Si 소모량 = 0.44 × 성장 산화막 두께 (몰밀도비 2.2×10²²/5.0×10²² ≈ 0.44)
+  // → 표면은 0.56·Δx 만큼만 상승한다.
+  const OXIDATION = {
+    // TODO(REVIEW): 1000°C 교과서 대표값 (Deal & Grove 1965; Jaeger/Campbell 수준).
+    // A[µm], B[µm²/h], tau[h]. dry의 τ=0.37h는 초기 급속 성장 구간 보정 —
+    // 짧은 dry 산화도 즉시 ~23nm 등가에서 시작하는 근사가 된다 (승인 필요).
+    dry: { A: 0.165, B: 0.0117, tau: 0.37 },
+    wet: { A: 0.226, B: 0.287, tau: 0 },
+    SI_CONSUMPTION_RATIO: 0.44
+  };
+
+  // TODO(REVIEW): 도핑된 Si(Si-n/Si-p)도 산화 대상에 포함 (물리적으로 타당하나
+  // PHYSICS_REVIEW 1.1은 "Si 및 Poly-Si"만 명시 — 확인 요청).
+  const OXIDIZABLE = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
+
+  // 총 산화막 두께 [nm]: 시각 t_h + max(τ, τ_eq(x₀))에서의 Deal-Grove 해.
+  // dry의 τ=0.37h는 "등가 초기 산화막 ~23nm"(초기 급속 성장 보정)이므로
+  // 기존 산화막의 τ_eq와 합산하지 않고 max를 취한다 — 합산하면 실행할 때마다
+  // τ만큼 이력이 중복 가산되어 time=0 반복 실행으로도 산화막이 계속 자란다
+  // (브라우저 검증에서 발견된 회계 오류).
+  function dealGroveTotal(x0nm, timeH, p) {
+    const x0 = x0nm / 1000; // µm
+    const tauEq = (x0 * x0 + p.A * x0) / p.B;
+    const tEff = timeH + Math.max(p.tau, tauEq);
+    const x = (p.A / 2) * (Math.sqrt(1 + (4 * p.B * tEff) / (p.A * p.A)) - 1);
+    return x * 1000; // nm
+  }
+
+  // 한 컬럼 산화 (제자리 수정 — oxidize()가 클론 후 호출).
+  // 반환: { grown, consumed, reason } — reason은 성장 0일 때의 사유.
+  function oxidizeColumn(colStack, mode, timeMin) {
+    const p = OXIDATION[mode];
+    if (!(timeMin > 0)) return { grown: 0, consumed: 0, reason: '시간 0' };
+    // 위에서부터: 연속된 SiO2는 기존 산화막(x₀)으로 누적, 그 아래 첫 재질 확인
+    let x0 = 0;
+    let siIdx = -1;
+    for (let i = colStack.length - 1; i >= 0; i--) {
+      if (colStack[i].thk <= 0) continue;
+      if (colStack[i].mat === 'SiO2') { x0 += colStack[i].thk; continue; }
+      siIdx = i;
+      break;
+    }
+    if (siIdx < 0) return { grown: 0, consumed: 0, reason: 'Si 없음' };
+    if (OXIDIZABLE.indexOf(colStack[siIdx].mat) < 0) {
+      return { grown: 0, consumed: 0, reason: colStack[siIdx].mat + ' 차단' };
+    }
+
+    let grown = Math.max(0, dealGroveTotal(x0, timeMin / 60, p) - x0);
+    let consumed = OXIDATION.SI_CONSUMPTION_RATIO * grown;
+    // Si 레이어가 다 소모되면 그만큼만 성장 (재료 회계 보존)
+    if (consumed > colStack[siIdx].thk) {
+      consumed = colStack[siIdx].thk;
+      grown = consumed / OXIDATION.SI_CONSUMPTION_RATIO;
+    }
+    colStack[siIdx].thk -= consumed;
+
+    // 새 산화막은 Si 계면에서 생성 — Si 바로 위의 SiO2 레이어에 더하고, 없으면 삽입
+    let added = false;
+    for (let i = siIdx + 1; i < colStack.length; i++) {
+      if (colStack[i].thk <= 0) continue;
+      if (colStack[i].mat === 'SiO2') { colStack[i].thk += grown; added = true; }
+      break;
+    }
+    if (!added) colStack.splice(siIdx + 1, 0, { mat: 'SiO2', thk: grown });
+
+    return { grown: grown, consumed: consumed, reason: null };
+  }
+
+  // 열산화: mode 'dry' | 'wet', timeMin 분 단위. 컬럼별 독립 적용.
+  function oxidize(wafer, params) {
+    const mode = (params && params.mode === 'wet') ? 'wet' : 'dry';
+    const timeMin = params ? params.timeMin : 0;
+    const w = cloneWafer(wafer);
+    const results = {};
+    COLS.forEach(function (c) { results[c] = oxidizeColumn(w.cols[c], mode, timeMin); });
+    return { wafer: w, results: results, mode: mode };
   }
 
   // --- 리소그래피 ---
@@ -237,7 +311,8 @@
     topExposed: topExposed,
     normalize: normalize,
     deposit: deposit,
-    oxidizeFurnace: oxidizeFurnace,
+    OXIDATION: OXIDATION,
+    oxidize: oxidize,
     spinCoatPR: spinCoatPR,
     expose: expose,
     develop: develop,

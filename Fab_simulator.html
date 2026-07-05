@@ -174,7 +174,7 @@
     });
 
     const equipConfigs = {
-        'furnace': { title: 'Thermal Furnace', html: `<div class="form-group"><label>Process</label><select id="p-gas"><option value="dry">Dry Oxidation (O2)</option></select></div><div class="form-group"><label>Time (mins)</label><input type="number" id="p-time" value="60"></div>` },
+        'furnace': { title: 'Thermal Furnace', html: `<div class="form-group"><label>Process</label><select id="p-gas"><option value="dry">Dry Oxidation (O2)</option><option value="wet">Wet Oxidation (H2O)</option></select></div><div class="form-group"><label>Time (mins)</label><input type="number" id="p-time" value="60"></div><div class="helper-text">* 1000°C. 노출된 Si/Poly-Si에서만 성장 (Deal-Grove). Si 소모 = 0.44 × 성장 두께.</div>` },
         'pecvd': { title: 'PECVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="SiO2">Silicon Dioxide (SiO2)</option><option value="SiNx">Silicon Nitride (SiNx)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="50"></div>` },
         'lpcvd': { title: 'LPCVD', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="Poly-Si">Poly-Silicon (Poly-Si)</option><option value="SiNx">Silicon Nitride (Si3N4)</option></select></div><div class="form-group"><label>Thickness (nm)</label><input type="number" id="p-thk" value="40"></div><div class="helper-text">* Excellent Step Coverage</div>` },
         'ald': { title: 'ALD (Atomic Layer Deposition)', html: `<div class="form-group"><label>Target Material</label><select id="p-mat"><option value="HfO2">Hafnium Oxide (HfO2)</option><option value="Al2O3">Aluminum Oxide (Al2O3)</option></select></div><div class="form-group"><label>Cycles (Thickness)</label><input type="number" id="p-thk" value="10"></div><div class="helper-text">* Ultra-thin, precise High-k dielectrics</div>` },
@@ -203,9 +203,17 @@
 
         switch(currentEquip) {
             case 'furnace': {
-                const r = FabPhysics.oxidizeFurnace(wafer, parseFloat(document.getElementById('p-time').value));
+                const r = FabPhysics.oxidize(wafer, {
+                    mode: document.getElementById('p-gas').value,
+                    timeMin: parseFloat(document.getElementById('p-time').value)
+                });
                 wafer = r.wafer;
-                log(`SiO2 ${r.grown}nm 증착 완료.`);
+                log(`${r.mode === 'wet' ? 'Wet' : 'Dry'} 열산화 (1000°C):`);
+                FabPhysics.COLS.forEach(c => {
+                    const res = r.results[c];
+                    if (res.grown > 0) log(`&nbsp;&nbsp;[${c}] SiO2 +${res.grown.toFixed(1)}nm 성장, Si ${res.consumed.toFixed(1)}nm 소모`);
+                    else log(`&nbsp;&nbsp;[${c}] 성장 없음 (${res.reason})`);
+                });
                 break;
             }
             case 'pecvd': case 'lpcvd': case 'ald': case 'endura': {
