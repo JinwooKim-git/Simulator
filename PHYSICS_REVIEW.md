@@ -77,14 +77,18 @@ oxidize(columnStack, { mode, timeMin }) — 순수 함수
 추가로, 레이어 두께와 무관하게 전체가 변환된다 — 이온주입은 표면 근방(투영비정
 R_p 부근)에 분포하므로 500nm Si가 통째로 도핑되는 것은 비약이다.
 
-**권장 구현** (Phase 0의 새 데이터 모델 위에서)
-- 노출된 컬럼만 도핑. 변환 깊이 d_imp = min(층 두께, D_imp). D_imp 기본 100nm `REVIEW`.
-- 층이 D_imp보다 두꺼우면 분할: 상부 d_imp = Si-n(or p), 하부는 Si 유지.
+**구현 기준** (Phase 0의 새 데이터 모델 위에서 — 2026-07-06 소유자 승인)
+- 노출된 컬럼만 도핑. 변환 깊이 d_imp = min(층 두께, D_imp). **D_imp = 100nm 승인**.
+- 층이 D_imp보다 두꺼우면 분할: 상부 d_imp만 도핑 변종으로, 하부는 원래 재질 유지.
+- **도핑 대상 = 단결정 Si 계열 + Poly-Si 계열** (poly 게이트 도핑은 표준 공정 —
+  소유자 지시로 포함). 도핑된 poly는 Poly-Si-n/Poly-Si-p로 표기(결정성 유지).
+- **역도핑(카운터 도핑) 허용** — n↔p 재주입 시 상부 d_imp만 재변환.
 - 도즈/에너지 파라미터는 도입하지 않는다(A급 단순화로 유지).
 
 **백테스트**
 - C만 노출(L/R에 PR) 상태에서 implant → L/R의 재질 불변 (G2 회귀 테스트)
 - 300nm Si, D_imp=100 → 상부 100nm Si-n + 하부 200nm Si로 분할
+- Poly-Si 200nm에 n implant → 상부 100nm Poly-Si-n + 하부 100nm Poly-Si
 
 ## 1.3 [S] 증착 conformality 미구현 (G3)
 

@@ -345,6 +345,31 @@ test('F8d: Si가 노출되지 않은 컬럼은 사유와 함께 거부', () => {
   assert.strictEqual(r.wafer.cols.C[0].mat, 'Si');
 });
 
+test('F8f: Poly-Si 게이트 도핑 — 상부 100nm Poly-Si-n + 하부 Poly-Si 유지', () => {
+  // 2026-07-06 소유자 지시: poly 도핑은 표준 공정이므로 포함
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 20); // 게이트 산화막
+  w = Fab.deposit(w, 'Poly-Si', 200);
+  const r = Fab.implant(w, 'n');
+  const stack = r.wafer.cols.C.filter(l => l.thk > 0);
+  assert.strictEqual(stack[stack.length - 1].mat, 'Poly-Si-n');
+  assert.strictEqual(stack[stack.length - 1].thk, 100);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Poly-Si'), 100); // 하부 poly 유지
+  assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 20);     // 산화막 불변
+  assert.strictEqual(r.results.C.mat, 'Poly-Si-n');
+});
+
+test('F8g: 도핑된 poly는 산화·RIE(Poly-Si 타깃)·DRIE 경로에서 Si 계열로 처리', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 20);
+  w = Fab.deposit(w, 'Poly-Si', 100);
+  w = Fab.implant(w, 'n').wafer; // 전층 Poly-Si-n (100 ≤ D_imp)
+  // 산화: Poly-Si-n 위에서 성장해야 함
+  const ox = Fab.oxidize(w, { mode: 'dry', timeMin: 60 });
+  assert.ok(ox.results.C.grown > 0);
+  // RIE Poly-Si 타깃이 도핑 변종도 식각
+  const etched = Fab.dryEtch(w, 'Poly-Si', 100);
+  assert.strictEqual(totalOf(etched, 'C', 'Poly-Si-n'), 0);
+});
+
 test('F8e: 역도핑 — Si-n 위 p implant → 상부만 Si-p로 재변환', () => {
   const first = Fab.implant(Fab.createWafer(300), 'n'); // 상부 100 Si-n
   const second = Fab.implant(first.wafer, 'p');

@@ -134,6 +134,8 @@
         'Si-p': { name: 'P-doped Si', color: '#2d3436' },
         'Si-n': { name: 'N-doped Si', color: '#b2bec3' },
         'Poly-Si': { name: 'Poly-Si', color: '#e67e22' }, // 다결정 실리콘 추가
+        'Poly-Si-n': { name: 'N-doped Poly', color: '#f5b041' },
+        'Poly-Si-p': { name: 'P-doped Poly', color: '#a04000' },
         'SiO2': { name: 'Oxide (SiO2)', color: '#0984e3' },
         'SiNx': { name: 'Nitride (SiNx)', color: '#6c5ce7' },
         'HfO2': { name: 'High-k (HfO2)', color: '#00cec9' }, // High-k 추가
@@ -277,10 +279,10 @@
             case 'implanter': {
                 const r = FabPhysics.implant(wafer, document.getElementById('p-dop').value);
                 wafer = r.wafer;
-                log(`Ion Implant (${r.mat}, 깊이 ≤ ${FabPhysics.D_IMPLANT}nm):`);
+                log(`Ion Implant (${r.dopant}형, 깊이 ≤ ${FabPhysics.D_IMPLANT}nm):`);
                 FabPhysics.COLS.forEach(c => {
                     const res = r.results[c];
-                    if (res.doped) log(`&nbsp;&nbsp;[${c}] 상부 ${res.depth.toFixed(0)}nm → ${r.mat}`);
+                    if (res.doped) log(`&nbsp;&nbsp;[${c}] 상부 ${res.depth.toFixed(0)}nm → ${res.mat}`);
                     else log(`&nbsp;&nbsp;[${c}] 도핑 안 됨 (${res.reason})`);
                 });
                 break;
