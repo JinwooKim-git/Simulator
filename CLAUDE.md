@@ -173,7 +173,7 @@
 | Vth | 1.0 V | 기존 코드 유지 |
 | 전압 스케일 | 0–3 V | 기존 슬라이더 유지 |
 | RIE 선택비 (SiO2:Si 등) | PHYSICS_REVIEW 1.4 표 | **승인됨 (2026-07-06)** — 기본값 10, wet 언더컷 1:1 포함 |
-| Conformality 계수 | ALD 1.0 / LPCVD 0.9 / PECVD 0.6 / PVD 0.3 | 정성 근사 |
+| Conformality 계수 | ALD 1.0 / LPCVD 0.9 / PECVD 0.6 / PVD 0.3 | **승인됨 (2026-07-06)** — 단차 이분법 포함, AR 의존은 Phase 4 |
 | Sense amp 감지 한계 | 구현 시 제안 | Cs/C_BL 기본비 포함 |
 
 ## 9. 하지 말 것
