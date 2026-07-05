@@ -1,9 +1,9 @@
 // FabPhysics — Virtual Fab 상태 전이 순수 함수 모듈 (UMD-lite, 브라우저/Node 겸용)
 //
 // Phase 0에서 구조 분리, Phase 1에서 물리를 순차 교정 중.
-// 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1.
-// 잔여 갭(G2~G4)은 characterization 테스트가 현재 동작을 고정하고 있으며,
-// 각 교정 PR에서 물리 기대값 테스트로 교체된다.
+// 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1 / G4 식각 선택비·언더컷 — Phase 1-2.
+// 잔여 갭(G2 implant 마스킹, G3 conformality)은 characterization 테스트가
+// 현재 동작을 고정하고 있으며, 각 교정 PR에서 물리 기대값 테스트로 교체된다.
 //
 // 데이터 모델 (b): 컬럼별 완전 독립 스택 (2026-07-05 소유자 승인)
 //   wafer = {
@@ -27,7 +27,12 @@
   function cloneWafer(wafer) {
     const cols = {};
     COLS.forEach(function (c) {
-      cols[c] = wafer.cols[c].map(function (l) { return { mat: l.mat, thk: l.thk }; });
+      cols[c] = wafer.cols[c].map(function (l) {
+        const layer = { mat: l.mat, thk: l.thk };
+        // uc: wet 언더컷 annotation { L?: nm, R?: nm } — 두께 회계와 분리된 형상 메타데이터
+        if (l.uc) layer.uc = { L: l.uc.L || 0, R: l.uc.R || 0 };
+        return layer;
+      });
     });
     return { cols: cols, pendingExposure: wafer.pendingExposure || null };
   }
@@ -97,8 +102,7 @@
     SI_CONSUMPTION_RATIO: 0.44
   };
 
-  // TODO(REVIEW): 도핑된 Si(Si-n/Si-p)도 산화 대상에 포함 (물리적으로 타당하나
-  // PHYSICS_REVIEW 1.1은 "Si 및 Poly-Si"만 명시 — 확인 요청).
+  // 도핑된 Si(Si-n/Si-p) 포함 — 2026-07-06 소유자 승인 (PHYSICS_REVIEW 1.1 갱신됨)
   const OXIDIZABLE = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
 
   // 총 산화막 두께 [nm]: 시각 t_h + max(τ, τ_eq(x₀))에서의 Deal-Grove 해.
@@ -217,66 +221,141 @@
     return w;
   }
 
-  // --- 식각 ---
+  // --- 식각 (Phase 1-2, G4 교정: PHYSICS_REVIEW 1.4) ---
+  //
+  // 유한 선택비: S = ER(타깃)/ER(하부막). 타깃 관통 후 잔여 식각량(타깃 환산 nm)이
+  // 있으면 하부막을 remaining/S 만큼 소모한다 (첫 하부막에서 정지).
+  // wet은 수직으로는 기존처럼 노출 타깃 전량 제거(식각 정지 신뢰)하되,
+  // 인접 컬럼의 마스크 아래 동일 재질 층에 undercut을 annotation으로 기록한다 —
+  // 컬럼 두께 배열은 건드리지 않는다 (3컬럼 모델 한계 존중, PROCESS_CHALLENGES 설계 원칙).
 
-  // 한 컬럼을 위에서부터 식각. matchFn이 false인 재질을 만나면 정지.
-  // TODO(REVIEW): G4 특성 보존 — 무한 선택비(다른 재질에서 무조건 정지),
-  // over-etch 하부 손실 없음, wet 언더컷 없음. Phase 1-2에서 유한 선택비로 교정.
-  function etchColumn(colStack, matchFn, amount) {
-    let remaining = amount;
-    for (let i = colStack.length - 1; i >= 0 && remaining > 0; i--) {
-      if (colStack[i].thk > 0) {
-        if (matchFn(colStack[i].mat)) {
-          const etched = Math.min(colStack[i].thk, remaining);
-          colStack[i].thk -= etched;
-          remaining -= etched;
-        } else break; // 선택비 정지
-      }
-    }
+  // TODO(REVIEW): 재질쌍 선택비 잠정 테이블 (일반 문헌 수준, 전부 승인 대상).
+  // RIE는 타깃 선택이 곧 화학 선택: SiO2 타깃 = CHF3계 (SiO2:Si 8, SiO2:PR 4),
+  // Si/Poly 타깃 = CF4/O2계 (Si:SiO2 2). 미정의 쌍은 DEFAULT 10.
+  const SELECTIVITY = {
+    rie: {
+      'SiO2': { 'Si': 8, 'Si-n': 8, 'Si-p': 8, 'Poly-Si': 8, 'PR': 4 },
+      'Poly-Si': { 'SiO2': 2, 'HfO2': 2 },
+      'SiNx': {},
+      'Al': {},
+      'HfO2': {}
+    },
+    drie: { 'SiO2': 50 } // Bosch, Si:SiO2 ≥ 50:1. 그 외 하부막은 정지(Infinity).
+  };
+  const DEFAULT_SELECTIVITY = 10; // TODO(REVIEW)
+
+  const SI_FAMILY = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
+
+  function rieSelectivity(targetMat, underMat) {
+    const row = SELECTIVITY.rie[targetMat];
+    if (row && row[underMat] !== undefined) return row[underMat];
+    return DEFAULT_SELECTIVITY;
   }
 
-  // RIE: 타깃 재질이 노출된 컬럼만, 타깃 재질만 식각
+  // 한 컬럼을 위에서부터 식각. matchFn 재질은 1:1로 소모하고,
+  // 처음 만나는 비타깃 재질은 remaining/S 만큼 소모 후 정지.
+  // selFn(underMat) → S. S = Infinity면 완전 정지(잠정: wet 등).
+  // 반환: 실제 제거된 타깃 두께 합 [nm].
+  function etchColumn(colStack, matchFn, amount, selFn) {
+    let remaining = amount;
+    let removed = 0;
+    for (let i = colStack.length - 1; i >= 0 && remaining > 0; i--) {
+      if (colStack[i].thk <= 0) continue;
+      if (matchFn(colStack[i].mat)) {
+        const etched = Math.min(colStack[i].thk, remaining);
+        colStack[i].thk -= etched;
+        remaining -= etched;
+        removed += etched;
+      } else {
+        const S = selFn ? selFn(colStack[i].mat) : Infinity;
+        if (isFinite(S) && S > 0) {
+          const loss = Math.min(colStack[i].thk, remaining / S);
+          colStack[i].thk -= loss;
+        }
+        break; // over-etch는 첫 하부막까지만 (그 아래 관통은 비물리적 시간 스케일)
+      }
+    }
+    return removed;
+  }
+
+  // RIE: 타깃 재질이 노출된 컬럼만 식각. over-etch 시 하부막이 선택비 비율로 소모.
   function dryEtch(wafer, targetMat, amount) {
     const w = cloneWafer(wafer);
     const tops = topExposed(w);
+    const etched = { L: 0, C: 0, R: 0 };
     COLS.forEach(function (c) {
       if (tops[c] === targetMat) {
-        etchColumn(w.cols[c], function (m) { return m === targetMat; }, amount);
+        etched[c] = etchColumn(
+          w.cols[c],
+          function (m) { return m === targetMat; },
+          amount,
+          function (under) { return rieSelectivity(targetMat, under); }
+        );
       }
     });
     return w;
   }
 
-  // TODO(REVIEW): 기존 동작 보존 — 'Si_Deep' 매칭이 startsWith('Si')라서
-  // Si/Si-n/Si-p뿐 아니라 SiO2/SiNx까지 관통하고, Poly-Si는 제외된다.
-  // 의도된 것인지 소유자 확인 필요 (아마 비의도 — Phase 1에서 재검토).
-  function matchesDeepSi(mat) { return mat.indexOf('Si') === 0; }
+  // DRIE(Bosch)는 Si 계열(단결정·도핑·다결정)을 식각한다.
+  // (Phase 0의 startsWith('Si') 매칭은 SiO2/SiNx까지 관통하고 Poly-Si를 제외하는
+  // 비의도 동작이었음 — Phase 1-2에서 SI_FAMILY로 교정, 테스트 F6 교체.)
+  function matchesDeepSi(mat) { return SI_FAMILY.indexOf(mat) >= 0; }
 
-  // DRIE: 최상층이 Si계('Si'로 시작)인 컬럼만 깊이 식각
+  // DRIE: 최상층이 Si 계열인 컬럼만 깊이 식각. SiO2 착지 시 50:1로 소모.
   function deepEtch(wafer, timeSec) {
     const w = cloneWafer(wafer);
     const depth = timeSec * DEEP_ETCH_RATE;
     const tops = topExposed(w);
     COLS.forEach(function (c) {
       if (tops[c] && matchesDeepSi(tops[c])) {
-        etchColumn(w.cols[c], matchesDeepSi, depth);
+        etchColumn(w.cols[c], matchesDeepSi, depth, function (under) {
+          return (SELECTIVITY.drie[under] !== undefined) ? SELECTIVITY.drie[under] : Infinity;
+        });
       }
     });
     return { wafer: w, depth: depth };
   }
 
-  // Wet: BOE → SiO2, PAN → Al. 노출된 타깃을 전량 제거 (등방성/언더컷 없음 — G4 보존)
+  // 인접 컬럼 (L–C–R 순서 기하)
+  const NEIGHBORS = { L: ['C'], C: ['L', 'R'], R: ['C'] };
+  const COL_INDEX = { L: 0, C: 1, R: 2 };
+
+  // Wet: BOE → SiO2, PAN → Al. 수직으로는 노출된 타깃 전량 제거(식각 정지막 신뢰 —
+  // 하부막 손실 0은 wet의 고선택비 근사, TODO(REVIEW): BOE SiO2:Si ≥ 100:1).
+  // 등방성: 제거 깊이 d 만큼, 인접한 마스크된 컬럼의 동일 재질 층에
+  // 언더컷 ≈ d (측면:수직 ≈ 1:1)를 uc annotation으로 기록한다.
   function wetEtch(wafer, etchant) {
     const target = WET_TARGETS[etchant];
     const w = cloneWafer(wafer);
-    if (!target) return { wafer: w, target: null };
+    if (!target) return { wafer: w, target: null, undercuts: [], etched: { L: 0, C: 0, R: 0 } };
     const tops = topExposed(w);
+    const undercuts = [];
+    const etched = { L: 0, C: 0, R: 0 };
     COLS.forEach(function (c) {
-      if (tops[c] === target) {
-        etchColumn(w.cols[c], function (m) { return m === target; }, WET_ETCH_AMOUNT);
-      }
+      if (tops[c] !== target) return;
+      const removed = etchColumn(
+        w.cols[c],
+        function (m) { return m === target; },
+        WET_ETCH_AMOUNT
+      );
+      etched[c] = removed;
+      if (removed <= 0) return;
+      NEIGHBORS[c].forEach(function (n) {
+        if (tops[n] === target) return; // 이웃도 개구부면 언더컷이 아니라 그냥 식각됨
+        // 이웃 컬럼에서 마스크 아래의 최상단 동일 재질 층을 찾아 개구부 쪽에 기록
+        const stack = w.cols[n];
+        for (let i = stack.length - 1; i >= 0; i--) {
+          if (stack[i].thk > 0 && stack[i].mat === target) {
+            const side = (COL_INDEX[n] < COL_INDEX[c]) ? 'R' : 'L'; // 개구부를 향한 면
+            if (!stack[i].uc) stack[i].uc = { L: 0, R: 0 };
+            stack[i].uc[side] += removed;
+            undercuts.push({ col: n, side: side, nm: removed, mat: target });
+            break;
+          }
+        }
+      });
     });
-    return { wafer: w, target: target };
+    return { wafer: w, target: target, undercuts: undercuts, etched: etched };
   }
 
   // --- 이온주입 ---
@@ -313,6 +392,7 @@
     deposit: deposit,
     OXIDATION: OXIDATION,
     oxidize: oxidize,
+    SELECTIVITY: SELECTIVITY,
     spinCoatPR: spinCoatPR,
     expose: expose,
     develop: develop,
