@@ -123,7 +123,11 @@
         </div>
     </div>
 
+<script src="js/fab_physics.js"></script>
 <script>
+    // 물리(상태 전이)는 js/fab_physics.js의 순수 함수로 분리됨.
+    // 이 파일에는 렌더링·DOM·이벤트 처리만 남긴다.
+
     // --- 확장된 물성 데이터 ---
     const materials = {
         'Si': { name: 'Silicon', color: '#636e72' },
@@ -143,7 +147,7 @@
         legendDiv.innerHTML += `<div><span class="color-box" style="background:${materials[key].color}"></span>${key}</div>`;
     }
 
-    let waferStack = [{ mat: 'Si', L: 200, C: 200, R: 200, exp: false }];
+    let wafer = FabPhysics.createWafer(200);
     let currentEquip = null;
     const logArea = document.getElementById('log-area');
     const canvas = document.getElementById('cs-canvas');
@@ -194,116 +198,94 @@
 
     document.getElementById('btn-cancel').addEventListener('click', () => modal.style.display = 'none');
 
-    function deposit(mat, thk) { waferStack.push({ mat: mat, L: thk, C: thk, R: thk, exp: false }); log(`${mat} ${thk}nm 증착 완료.`); }
-
-    function etchRegion(region, targetMat, amount) {
-        let remaining = amount;
-        for (let i = waferStack.length - 1; i >= 0; i--) {
-            if (remaining <= 0) break;
-            if (waferStack[i][region] > 0) {
-                if (targetMat === 'All' || waferStack[i].mat === targetMat || targetMat === 'Si_Deep' && waferStack[i].mat.startsWith('Si')) {
-                    let etched = Math.min(waferStack[i][region], remaining);
-                    waferStack[i][region] -= etched; remaining -= etched;
-                } else break; // Selectivity
-            }
-        }
-    }
-
-    function cleanEmptyLayers() { waferStack = waferStack.filter(l => l.L > 0 || l.C > 0 || l.R > 0); }
-
     document.getElementById('btn-run').addEventListener('click', () => {
         modal.style.display = 'none'; log(`\n--- [${equipConfigs[currentEquip].title}] ---`);
 
         switch(currentEquip) {
-            case 'furnace': deposit('SiO2', parseFloat(document.getElementById('p-time').value) * 0.5); break;
-            case 'pecvd': case 'lpcvd': case 'ald': case 'endura':
-                deposit(document.getElementById('p-mat').value, parseFloat(document.getElementById('p-thk').value)); break;
+            case 'furnace': {
+                const r = FabPhysics.oxidizeFurnace(wafer, parseFloat(document.getElementById('p-time').value));
+                wafer = r.wafer;
+                log(`SiO2 ${r.grown}nm 증착 완료.`);
+                break;
+            }
+            case 'pecvd': case 'lpcvd': case 'ald': case 'endura': {
+                const mat = document.getElementById('p-mat').value;
+                const thk = parseFloat(document.getElementById('p-thk').value);
+                wafer = FabPhysics.deposit(wafer, mat, thk);
+                log(`${mat} ${thk}nm 증착 완료.`);
+                break;
+            }
             case 'track':
                 if (document.getElementById('p-op').value === 'coat') {
-                    let maxH = 0; let curL = 0, curC = 0, curR = 0;
-                    waferStack.forEach(lyr => { curL += lyr.L; curC += lyr.C; curR += lyr.R; });
-                    maxH = Math.max(curL, curC, curR);
-                    waferStack.push({ mat: 'PR', L: (maxH - curL) + 60, C: (maxH - curC) + 60, R: (maxH - curR) + 60, expMask: null });
+                    wafer = FabPhysics.spinCoatPR(wafer);
                     log('PR Spin Coating (Planarization).');
                 } else {
-                    let topPR = waferStack.find(l => l.mat === 'PR');
-                    if (topPR && topPR.expMask) {
-                        if (topPR.expMask === 'center') topPR.C = 0;
-                        if (topPR.expMask === 'edges') { topPR.L = 0; topPR.R = 0; }
-                        log('현상(Develop) 완료.');
-                    } else log('Warning: 노광되지 않았거나 PR이 없습니다.');
+                    const r = FabPhysics.develop(wafer);
+                    wafer = r.wafer;
+                    if (r.developed) log('현상(Develop) 완료.');
+                    else log('Warning: 노광되지 않았거나 PR이 없습니다.');
                 }
                 break;
-            case 'stepper':
-                let prLayer = waferStack.slice().reverse().find(l => l.mat === 'PR');
-                if (prLayer) { prLayer.expMask = (document.getElementById('p-mask').value === 'dark') ? 'center' : 'edges'; log('노광 완료.'); }
+            case 'stepper': {
+                const r = FabPhysics.expose(wafer, document.getElementById('p-mask').value);
+                wafer = r.wafer;
+                if (r.exposed) log('노광 완료.');
                 break;
-            case 'drie':
-                let depth = parseFloat(document.getElementById('p-time').value) * 3;
-                let tDrie = getTopExposedMaterials();
-                if(tDrie.L.startsWith('Si')) etchRegion('L', 'Si_Deep', depth);
-                if(tDrie.C.startsWith('Si')) etchRegion('C', 'Si_Deep', depth);
-                if(tDrie.R.startsWith('Si')) etchRegion('R', 'Si_Deep', depth);
-                log(`Deep RIE 진행. 깊이 ${depth}nm 식각.`);
+            }
+            case 'drie': {
+                const r = FabPhysics.deepEtch(wafer, parseFloat(document.getElementById('p-time').value));
+                wafer = r.wafer;
+                log(`Deep RIE 진행. 깊이 ${r.depth}nm 식각.`);
                 break;
-            case 'rie':
-                let rTarget = document.getElementById('p-target').value;
-                let rAmt = parseFloat(document.getElementById('p-amt').value);
-                let tRie = getTopExposedMaterials();
-                if(tRie.L === rTarget) etchRegion('L', rTarget, rAmt);
-                if(tRie.C === rTarget) etchRegion('C', rTarget, rAmt);
-                if(tRie.R === rTarget) etchRegion('R', rTarget, rAmt);
+            }
+            case 'rie': {
+                const rTarget = document.getElementById('p-target').value;
+                const rAmt = parseFloat(document.getElementById('p-amt').value);
+                wafer = FabPhysics.dryEtch(wafer, rTarget, rAmt);
                 log(`RIE 진행. ${rTarget} 목표 ${rAmt}nm 식각.`);
                 break;
-            case 'wet_etch':
-                let wT = (document.getElementById('p-etchant').value === 'BOE') ? 'SiO2' : 'Al';
-                let tWet = getTopExposedMaterials();
-                if(tWet.L === wT) etchRegion('L', wT, 1000);
-                if(tWet.C === wT) etchRegion('C', wT, 1000);
-                if(tWet.R === wT) etchRegion('R', wT, 1000);
-                log(`Wet Bath 노출된 ${wT} 제거됨.`);
+            }
+            case 'wet_etch': {
+                const r = FabPhysics.wetEtch(wafer, document.getElementById('p-etchant').value);
+                wafer = r.wafer;
+                log(`Wet Bath 노출된 ${r.target} 제거됨.`);
                 break;
-            case 'asher': waferStack.forEach(l => { if(l.mat === 'PR') { l.L=0; l.C=0; l.R=0; } }); log('O2 Asher: PR 제거 완료.'); break;
-            case 'implanter':
-                let newSi = document.getElementById('p-dop').value === 'n' ? 'Si-n' : 'Si-p';
-                let tImp = getTopExposedMaterials();
-                if(tImp.L === 'Si') waferStack.find(l=>l.L>0 && l.mat==='Si').mat = newSi;
-                if(tImp.C === 'Si') waferStack.find(l=>l.C>0 && l.mat==='Si').mat = newSi;
-                if(tImp.R === 'Si') waferStack.find(l=>l.R>0 && l.mat==='Si').mat = newSi;
-                log(`도핑 완료: ${newSi}`);
+            }
+            case 'asher':
+                wafer = FabPhysics.ash(wafer);
+                log('O2 Asher: PR 제거 완료.');
                 break;
+            case 'implanter': {
+                const r = FabPhysics.implant(wafer, document.getElementById('p-dop').value);
+                wafer = r.wafer;
+                log(`도핑 완료: ${r.mat}`);
+                break;
+            }
             case 'wet_clean': log('SPM Clean 진행.'); break;
         }
-        cleanEmptyLayers(); drawMetrology();
+        wafer = FabPhysics.normalize(wafer);
+        drawMetrology();
     });
-
-    function getTopExposedMaterials() {
-        let res = { L: null, C: null, R: null };
-        for (let i = waferStack.length - 1; i >= 0; i--) {
-            if (!res.L && waferStack[i].L > 0) res.L = waferStack[i].mat;
-            if (!res.C && waferStack[i].C > 0) res.C = waferStack[i].mat;
-            if (!res.R && waferStack[i].R > 0) res.R = waferStack[i].mat;
-        }
-        return res;
-    }
 
     function drawMetrology() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const colW = canvas.width / 3;
-        
-        let maxTotalThk = 0; let curL = 0, curC = 0, curR = 0;
-        waferStack.forEach(l => { curL += l.L; curC += l.C; curR += l.R; });
-        maxTotalThk = Math.max(curL, curC, curR);
-        let scale = Math.min(1.0, 200 / maxTotalThk); 
-        
-        let yL = canvas.height - 20, yC = canvas.height - 20, yR = canvas.height - 20;
 
-        waferStack.forEach(layer => {
-            ctx.fillStyle = materials[layer.mat].color || '#fff';
-            ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
-            if (layer.L > 0) { let h = layer.L * scale; ctx.fillRect(0, yL - h, colW, h); ctx.strokeRect(0, yL - h, colW, h); yL -= h; }
-            if (layer.C > 0) { let h = layer.C * scale; ctx.fillRect(colW, yC - h, colW, h); ctx.strokeRect(colW, yC - h, colW, h); yC -= h; }
-            if (layer.R > 0) { let h = layer.R * scale; ctx.fillRect(colW * 2, yR - h, colW, h); ctx.strokeRect(colW * 2, yR - h, colW, h); yR -= h; }
+        const h = FabPhysics.heights(wafer);
+        const maxTotalThk = Math.max(h.L, h.C, h.R);
+        let scale = Math.min(1.0, 200 / maxTotalThk);
+
+        FabPhysics.COLS.forEach((c, idx) => {
+            let y = canvas.height - 20;
+            wafer.cols[c].forEach(layer => {
+                if (layer.thk <= 0) return;
+                ctx.fillStyle = materials[layer.mat].color || '#fff';
+                ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
+                const lh = layer.thk * scale;
+                ctx.fillRect(colW * idx, y - lh, colW, lh);
+                ctx.strokeRect(colW * idx, y - lh, colW, lh);
+                y -= lh;
+            });
         });
         
         ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1; ctx.beginPath();

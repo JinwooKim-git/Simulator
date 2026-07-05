@@ -97,7 +97,11 @@
     <button id="refresh-btn">REFRESH (재충전)</button>
 </div>
 
+<script src="js/dram_physics.js"></script>
 <script>
+    // 물리(전하 갱신·장벽·밴드 오프셋)는 js/dram_physics.js의 순수 함수로 분리됨.
+    // 이 파일에는 렌더링·DOM·이벤트 처리만 남긴다. 갱신은 프레임 기반이 아니라
+    // dt(초) 기반 — 주사율(60/144Hz)과 무관하게 같은 속도로 동작한다.
     const circuitView = document.getElementById('circuit-view');
     const bandView = document.getElementById('band-view');
     const mosfetHitbox = document.getElementById('mosfet-hitbox');
@@ -116,8 +120,8 @@
     const bandCtx = document.getElementById('bandCanvas').getContext('2d');
 
     let state = {
-        wl: 0, bl: 0, vTh: 1.0, charge: 0, view: 'circuit',
-        particles: [], bandParticles: []
+        wl: 0, bl: 0, vTh: DramPhysics.DEFAULTS.vTh, charge: 0, view: 'circuit',
+        mode: 'leakage', particles: [], bandParticles: []
     };
 
     function updateState() {
@@ -129,7 +133,7 @@
     wlSlider.addEventListener('input', updateState);
     blSlider.addEventListener('input', updateState);
 
-    document.getElementById('refresh-btn').addEventListener('click', () => { state.charge = 100; });
+    document.getElementById('refresh-btn').addEventListener('click', () => { state.charge = DramPhysics.refreshCharge(); });
 
     mosfetHitbox.addEventListener('click', () => {
         state.view = 'band';
@@ -200,45 +204,31 @@
         circuitCtx.fillStyle = '#fff'; circuitCtx.font = '18px Arial';
         circuitCtx.fillText('BL (Drain)', 260, 80); circuitCtx.fillText('WL (Gate)', 100, 300); circuitCtx.fillText('Capacitor', 670, 470);
 
-        let isON = state.wl >= state.vTh;
-        circuitCtx.strokeStyle = isON ? '#2ed573' : '#ff4757'; 
+        let isON = DramPhysics.isOn(state.wl, state.vTh);
+        circuitCtx.strokeStyle = isON ? '#2ed573' : '#ff4757';
         circuitCtx.beginPath();
         circuitCtx.moveTo(300, 300); circuitCtx.lineTo(400, 300);
         circuitCtx.moveTo(400, 270); circuitCtx.lineTo(400, 330);
         circuitCtx.moveTo(420, 270); circuitCtx.lineTo(420, 330);
         circuitCtx.moveTo(400, 300); circuitCtx.lineTo(600, 300);
         circuitCtx.stroke();
-        
-        // --- 물리 로직 분리 ---
-        let maxChargeForBL = (state.bl / 3.0) * 100;
-        
-        if (!isON) {
-            // 1. OFF 상태: 자연 누설(Leakage)
-            if (state.charge > 0) state.charge -= 0.02; // 아주 느린 방전
+
+        // 물리 갱신은 updatePhysics(dt)에서 수행 — 여기서는 모드 표시와 파티클만
+        if (state.mode === 'leakage') {
             opMode.innerHTML = `대기 상태<br><span style="color:#ffbe76; font-size:0.8rem;">(Sub-threshold Leakage)</span>`;
             opMode.style.color = "#ffbe76";
+        } else if (state.mode === 'charging') {
+            opMode.innerHTML = `Write '1'<br><span style="color:#2ed573; font-size:0.8rem;">(Active Charging)</span>`;
+            opMode.style.color = "#2ed573";
+            if (Math.random() < 0.5) state.particles.push(new CircuitParticle(false));
+        } else if (state.mode === 'discharging') {
+            opMode.innerHTML = `Write '0' / Read<br><span style="color:#ff4757; font-size:0.8rem;">(Active Discharging)</span>`;
+            opMode.style.color = "#ff4757";
+            if (Math.random() < 0.5) state.particles.push(new CircuitParticle(true));
         } else {
-            // 2. ON 상태: Active Charge / Discharge
-            if (state.charge < maxChargeForBL - 1) {
-                // 충전 (BL 전압이 더 높음)
-                state.charge += 0.8;
-                opMode.innerHTML = `Write '1'<br><span style="color:#2ed573; font-size:0.8rem;">(Active Charging)</span>`;
-                opMode.style.color = "#2ed573";
-                if (Math.random() < 0.5) state.particles.push(new CircuitParticle(false));
-            } else if (state.charge > maxChargeForBL + 1) {
-                // 강제 방전 (BL 전압이 더 낮음, 예: BL=0)
-                state.charge -= 0.8;
-                opMode.innerHTML = `Write '0' / Read<br><span style="color:#ff4757; font-size:0.8rem;">(Active Discharging)</span>`;
-                opMode.style.color = "#ff4757";
-                if (Math.random() < 0.5) state.particles.push(new CircuitParticle(true));
-            } else {
-                // 전압 동기화 완료
-                opMode.innerHTML = `안정화 됨<br><span style="color:#aaa; font-size:0.8rem;">(Voltage Synced)</span>`;
-                opMode.style.color = "#aaa";
-            }
+            opMode.innerHTML = `안정화 됨<br><span style="color:#aaa; font-size:0.8rem;">(Voltage Synced)</span>`;
+            opMode.style.color = "#aaa";
         }
-        if (state.charge < 0) state.charge = 0;
-        if (state.charge > 100) state.charge = 100;
 
         // 충전 시각화
         if (state.charge > 0) {
@@ -280,15 +270,11 @@
         bandCtx.fillText('Source (Capacitor)', x1/2, 90); bandCtx.fillText('Channel', w/2, 90); bandCtx.fillText('Drain (Bit Line)', w - (w-x2)/2, 90);
 
         // Cap Charge에 따른 Source 밴드 위치 변화 (충전될수록 전위는 높아지고 에너지는 낮아짐)
-        const sourceDrop = (state.charge / 100) * 50;
-        const sourceY = baseY + sourceDrop;
-        
-        const drainDrop = state.bl * 50; 
-        const drainY = baseY + drainDrop;
-        
-        let barrierRatio = 1.0;
-        if (state.wl >= state.vTh) barrierRatio = Math.max(0, 0.2 - ((state.wl - state.vTh) / 2.0) * 0.2); 
-        else barrierRatio = 1.0 - (state.wl / state.vTh) * 0.8;
+        const offsets = DramPhysics.bandOffsets(state.charge, state.bl);
+        const sourceY = baseY + offsets.sourceDrop;
+        const drainY = baseY + offsets.drainDrop;
+
+        const barrierRatio = DramPhysics.barrierRatio(state.wl, state.vTh);
         let currentBarrierHeight = maxBarrierHeight * barrierRatio;
 
         const getEcY = (x, isOriginal = false) => {
@@ -321,7 +307,7 @@
             drawLine(bandGap, 'rgba(255, 255, 255, 0.1)', 2, false, true);
         }
 
-        let isON = state.wl >= state.vTh;
+        let isON = DramPhysics.isOn(state.wl, state.vTh);
         let bandColor = isON ? '#2ed573' : (state.wl > 0 ? '#ff4757' : '#ffffff');
         drawLine(0, bandColor, 3); drawLine(bandGap, bandColor, 3);
 
@@ -347,7 +333,7 @@
         drawElecPyr(x1 / 2, sourceY); drawElecPyr(w - (w - x2) / 2, drainY);
 
         if (isON) {
-            let maxChargeForBL = (state.bl / 3.0) * 100;
+            let maxChargeForBL = DramPhysics.targetCharge(state.bl);
             if (state.charge < maxChargeForBL - 1 && Math.random() < 0.6) {
                 state.bandParticles.push(new BandParticle(w - 20, getEcY, -1)); // BL -> Cap
             } else if (state.charge > maxChargeForBL + 1 && Math.random() < 0.6) {
@@ -361,8 +347,25 @@
         }
     }
 
-    function animate() { drawCircuit(); drawBand(); requestAnimationFrame(animate); }
-    updateState(); animate();
+    function updatePhysics(dt) {
+        // 기존 동작 보존: 밴드 뷰에서는 물리 갱신이 일어나지 않음 (회로 뷰에서만)
+        if (state.view !== 'circuit') return;
+        const r = DramPhysics.stepCharge(state, dt);
+        state.charge = r.charge;
+        state.mode = r.mode;
+    }
+
+    let lastTime = performance.now();
+    function animate(now) {
+        if (now === undefined) now = performance.now();
+        // 탭 비활성화 등으로 프레임이 길어져도 물리가 순간이동하지 않게 dt 상한 0.1s
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        updatePhysics(dt);
+        drawCircuit(); drawBand();
+        requestAnimationFrame(animate);
+    }
+    updateState(); requestAnimationFrame(animate);
 </script>
 </body>
 </html>
