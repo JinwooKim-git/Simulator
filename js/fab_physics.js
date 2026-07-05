@@ -229,9 +229,9 @@
   // 인접 컬럼의 마스크 아래 동일 재질 층에 undercut을 annotation으로 기록한다 —
   // 컬럼 두께 배열은 건드리지 않는다 (3컬럼 모델 한계 존중, PROCESS_CHALLENGES 설계 원칙).
 
-  // TODO(REVIEW): 재질쌍 선택비 잠정 테이블 (일반 문헌 수준, 전부 승인 대상).
+  // 재질쌍 선택비 테이블 — 2026-07-06 소유자 승인 (교육용 방향·자릿수 기준).
   // RIE는 타깃 선택이 곧 화학 선택: SiO2 타깃 = CHF3계 (SiO2:Si 8, SiO2:PR 4),
-  // Si/Poly 타깃 = CF4/O2계 (Si:SiO2 2). 미정의 쌍은 DEFAULT 10.
+  // Si/Poly 타깃 = CF4/O2계 (Si:SiO2 2). 미정의 쌍은 DEFAULT 10 (승인 포함).
   const SELECTIVITY = {
     rie: {
       'SiO2': { 'Si': 8, 'Si-n': 8, 'Si-p': 8, 'Poly-Si': 8, 'PR': 4 },
@@ -242,7 +242,7 @@
     },
     drie: { 'SiO2': 50 } // Bosch, Si:SiO2 ≥ 50:1. 그 외 하부막은 정지(Infinity).
   };
-  const DEFAULT_SELECTIVITY = 10; // TODO(REVIEW)
+  const DEFAULT_SELECTIVITY = 10; // 2026-07-06 승인
 
   const SI_FAMILY = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
 
