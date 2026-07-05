@@ -81,7 +81,7 @@
   //
   // step coverage = (트렌치 바닥 두께) / (상면 두께). 표면 반응율속(ALD, LPCVD)일수록
   // 컨포멀 ≈ 1, 도달 플럭스 지배(PVD 스퍼터)일수록 낮다. 종횡비 의존은 Phase 4(C6).
-  // TODO(REVIEW): 장비별 잠정 계수 (정성 근사, PHYSICS_REVIEW 1.3 / CLAUDE.md 8절)
+  // 계수 4종 + 단차 이분법 — 2026-07-06 소유자 승인
   const STEP_COVERAGE = {
     ald: 1.0,
     lpcvd: 0.9,
