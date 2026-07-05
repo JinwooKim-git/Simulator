@@ -21,23 +21,78 @@ function totalOf(wafer, col, mat) {
     .reduce((s, l) => s + l.thk, 0);
 }
 
-// --- F1. G1 특성: furnace는 표면 재질 무관 SiO2 '증착' (time × 0.5 nm) ---
+// --- F1. 열산화 물리 (Phase 1-1에서 G1 characterization을 교체) ---
+// 기대값 출처: PHYSICS_REVIEW 1.1 (Deal-Grove, 1000°C 대표 파라미터, REVIEW)
 
-test('F1a: furnace 60min → 모든 컬럼에 SiO2 30nm (bare Si 위)', () => {
-  const r = Fab.oxidizeFurnace(Fab.createWafer(200), 60);
-  assert.strictEqual(r.grown, 30);
+test('F1a (T1): dry 1000°C 60min bare Si → ~69nm 성장, Si 소모 = 0.44×', () => {
+  const r = Fab.oxidize(Fab.createWafer(500), { mode: 'dry', timeMin: 60 });
   for (const c of Fab.COLS) {
-    const top = r.wafer.cols[c][r.wafer.cols[c].length - 1];
-    assert.strictEqual(top.mat, 'SiO2');
-    assert.strictEqual(top.thk, 30);
+    const res = r.results[c];
+    assert.ok(Math.abs(res.grown - 69) / 69 < 0.05, `grown=${res.grown}`);
+    assert.ok(Math.abs(res.consumed - 0.44 * res.grown) < 0.5);
+    assert.ok(Math.abs(totalOf(r.wafer, c, 'Si') - (500 - res.consumed)) < 1e-9);
+    assert.ok(Math.abs(totalOf(r.wafer, c, 'SiO2') - res.grown) < 1e-9);
   }
 });
 
-test('F1b: G1 고정 — Al 위에서도 산화막이 자라고 Si를 소모하지 않음', () => {
-  let w = Fab.deposit(Fab.createWafer(200), 'Al', 100);
-  const r = Fab.oxidizeFurnace(w, 60);
-  assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 30); // 잘못된 동작을 그대로 고정
-  assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 200);  // Si 소모 없음
+test('F1b (T2): wet 1000°C 60min → ~435nm 성장', () => {
+  const r = Fab.oxidize(Fab.createWafer(500), { mode: 'wet', timeMin: 60 });
+  assert.ok(Math.abs(r.results.C.grown - 435) / 435 < 0.05, `grown=${r.results.C.grown}`);
+});
+
+test('F1c (T3): 기존 산화막 50nm 위 wet 30min 추가 성장 < bare Si 성장 (둔화)', () => {
+  const bare = Fab.oxidize(Fab.createWafer(500), { mode: 'wet', timeMin: 30 });
+  let w = Fab.deposit(Fab.createWafer(500), 'SiO2', 50);
+  const preOx = Fab.oxidize(w, { mode: 'wet', timeMin: 30 });
+  assert.ok(bare.results.C.grown > 250); // ~282nm 부근
+  assert.ok(preOx.results.C.grown < bare.results.C.grown);
+  assert.ok(preOx.results.C.grown > 0);
+  // 기존 산화막은 소모되지 않고 그 위에 누적
+  assert.ok(Math.abs(totalOf(preOx.wafer, 'C', 'SiO2') - (50 + preOx.results.C.grown)) < 1e-9);
+});
+
+test('F1d (T4): 최상층 Al/PR → 성장 0 + 사유 반환', () => {
+  const onAl = Fab.oxidize(Fab.deposit(Fab.createWafer(200), 'Al', 100), { mode: 'dry', timeMin: 60 });
+  assert.strictEqual(onAl.results.C.grown, 0);
+  assert.ok(onAl.results.C.reason);
+  const onPR = Fab.oxidize(Fab.spinCoatPR(Fab.createWafer(200)), { mode: 'dry', timeMin: 60 });
+  assert.strictEqual(onPR.results.C.grown, 0);
+});
+
+test('F1e: 컬럼별 독립 — C만 Si 노출이면 C만 산화 (마스크된 L/R은 불변)', () => {
+  // G2와 달리 산화는 새 모델에서 처음부터 컬럼별로 올바르게 동작해야 한다
+  let w = Fab.deposit(Fab.createWafer(500), 'SiNx', 100); // 산화 배리어
+  w = patterned(w, 'dark');
+  w = Fab.normalize(Fab.dryEtch(w, 'SiNx', 100)); // C만 Si 노출
+  const r = Fab.oxidize(w, { mode: 'dry', timeMin: 60 });
+  assert.ok(r.results.C.grown > 0);
+  assert.strictEqual(r.results.L.grown, 0);
+  assert.strictEqual(r.results.R.grown, 0);
+  assert.strictEqual(totalOf(r.wafer, 'L', 'SiO2'), 0);
+});
+
+test('F1g: 이력 무중복 — 두꺼운 기존 산화막 위 time=0 → 성장 0 (τ/τ_eq 중복 가산 회귀)', () => {
+  // 브라우저 검증에서 발견: dry τ(0.37h)가 τ_eq에 매번 합산되면 time=0
+  // 반복 실행으로도 산화막이 계속 자란다. max(τ, τ_eq)로 수정 후 고정.
+  let w = Fab.deposit(Fab.createWafer(500), 'SiO2', 100);
+  const r = Fab.oxidize(w, { mode: 'dry', timeMin: 0 });
+  assert.strictEqual(r.results.C.grown, 0);
+  // 아주 짧은 시간의 반복도 순수 시간 합과 같아야 함 (τ 중복 없음)
+  const once = Fab.oxidize(w, { mode: 'dry', timeMin: 60 }).results.C.grown;
+  let w2 = Fab.oxidize(w, { mode: 'dry', timeMin: 30 }).wafer;
+  const twice = Fab.oxidize(w2, { mode: 'dry', timeMin: 30 });
+  const total2 = (100 + once);
+  const totalSplit = totalOf(twice.wafer, 'C', 'SiO2');
+  assert.ok(Math.abs(totalSplit - total2) < 0.01, `split=${totalSplit} vs once=${total2}`);
+});
+
+test('F1f: Poly-Si도 산화되며, 소모돼도 하부 재질은 침범하지 않음', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'Al', 50);
+  w = Fab.deposit(w, 'Poly-Si', 10); // 얇은 Poly — wet 60min이면 요구 소모량 > 10nm
+  const r = Fab.oxidize(w, { mode: 'wet', timeMin: 60 });
+  assert.ok(Math.abs(r.results.C.consumed - 10) < 1e-9); // Poly 전량 소모에서 정지
+  assert.ok(Math.abs(r.results.C.grown - 10 / 0.44) < 1e-6);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Al'), 50); // 하부 Al 불변
 });
 
 // --- F2. G3 특성: 모든 증착이 단차와 무관하게 전 컬럼 균일 ---
@@ -223,7 +278,7 @@ test('P1: 함수는 입력 wafer를 변경하지 않는다', () => {
   const w = Fab.createWafer(200);
   const snapshot = JSON.stringify(w);
   Fab.deposit(w, 'SiO2', 50);
-  Fab.oxidizeFurnace(w, 60);
+  Fab.oxidize(w, { mode: 'dry', timeMin: 60 });
   Fab.spinCoatPR(w);
   Fab.dryEtch(w, 'Si', 50);
   Fab.implant(w, 'n');
