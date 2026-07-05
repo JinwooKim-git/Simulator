@@ -2,8 +2,9 @@
 //
 // Phase 0에서 구조 분리, Phase 1에서 물리를 순차 교정 중.
 // 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1 / G4 식각 선택비·언더컷 — Phase 1-2 /
-// G3 증착 conformality — Phase 1-3 / G2 implant 마스킹+깊이 — Phase 1-4.
-// Fab의 [E]급 물리 갭(G1~G4)은 모두 교정됨. 다음: 1-5 온도 규칙, 1-6 Metrology.
+// G3 증착 conformality — Phase 1-3 / G2 implant 마스킹+깊이 — Phase 1-4 /
+// L1 공정 순서 열예산 규칙 — Phase 1-5.
+// Fab의 [E]급 물리 갭(G1~G4)은 모두 교정됨. 다음: 1-6 Metrology 보강.
 //
 // 데이터 모델 (b): 컬럼별 완전 독립 스택 (2026-07-05 소유자 승인)
 //   wafer = {
@@ -131,7 +132,7 @@
   };
 
   // 도핑된 Si(Si-n/Si-p) 포함 — 2026-07-06 소유자 승인 (PHYSICS_REVIEW 1.1 갱신됨)
-  const OXIDIZABLE = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
+  const OXIDIZABLE = ['Si', 'Si-n', 'Si-p', 'Poly-Si', 'Poly-Si-n', 'Poly-Si-p'];
 
   // 총 산화막 두께 [nm]: 시각 t_h + max(τ, τ_eq(x₀))에서의 Deal-Grove 해.
   // dry의 τ=0.37h는 "등가 초기 산화막 ~23nm"(초기 급속 성장 보정)이므로
@@ -272,7 +273,7 @@
   };
   const DEFAULT_SELECTIVITY = 10; // 2026-07-06 승인
 
-  const SI_FAMILY = ['Si', 'Si-n', 'Si-p', 'Poly-Si'];
+  const SI_FAMILY = ['Si', 'Si-n', 'Si-p', 'Poly-Si', 'Poly-Si-n', 'Poly-Si-p'];
 
   function rieSelectivity(targetMat, underMat) {
     const row = SELECTIVITY.rie[targetMat];
@@ -306,16 +307,23 @@
     return removed;
   }
 
+  // RIE 타깃 매칭: Poly-Si 타깃은 도핑 변종(Poly-Si-n/p)도 함께 식각한다
+  // (같은 재질의 도핑 차이는 식각 화학에서 사실상 동일 — 정성 근사).
+  function matchesRieTarget(targetMat, mat) {
+    if (mat === targetMat) return true;
+    return targetMat === 'Poly-Si' && mat.indexOf('Poly-Si') === 0;
+  }
+
   // RIE: 타깃 재질이 노출된 컬럼만 식각. over-etch 시 하부막이 선택비 비율로 소모.
   function dryEtch(wafer, targetMat, amount) {
     const w = cloneWafer(wafer);
     const tops = topExposed(w);
     const etched = { L: 0, C: 0, R: 0 };
     COLS.forEach(function (c) {
-      if (tops[c] === targetMat) {
+      if (tops[c] && matchesRieTarget(targetMat, tops[c])) {
         etched[c] = etchColumn(
           w.cols[c],
-          function (m) { return m === targetMat; },
+          function (m) { return matchesRieTarget(targetMat, m); },
           amount,
           function (under) { return rieSelectivity(targetMat, under); }
         );
@@ -386,21 +394,55 @@
     return { wafer: w, target: target, undercuts: undercuts, etched: etched };
   }
 
+  // --- 공정 순서 열예산 규칙 (Phase 1-5, L1: PHYSICS_REVIEW 1.5) ---
+  //
+  // 개별 공정이 다 맞아도 순서가 틀리면 소자가 죽는다 — 공정 통합의 제1 감각.
+  // 웨이퍼에 존재하는 재료의 최대 허용온도 < 장비 공정온도면 위반을 보고한다.
+  // 기본 동작은 경고 후 진행 (차단 여부는 소유자 결정 사항 — PHYSICS_REVIEW 1.5).
+  // TODO(REVIEW): 온도 테이블 전체 (PR 130°C는 하드베이크 전 근사, Al 450°C는
+  // 융점 660°C 대비 힐락/스파이크 여유를 둔 공정 한계)
+  const MATERIAL_TEMP_LIMIT = { PR: 130, Al: 450 }; // °C — 기타 재료는 제한 없음
+  const EQUIP_TEMP = { furnace: 1000, lpcvd: 600, pecvd: 300, ald: 250 }; // °C — 그 외 ~실온
+  const ROOM_TEMP = 25;
+
+  // 순수 함수: 위반 목록 반환. { equipTemp, violations: [{mat, limit, equipTemp}] }
+  function checkThermalBudget(wafer, equipId) {
+    const t = (EQUIP_TEMP[equipId] !== undefined) ? EQUIP_TEMP[equipId] : ROOM_TEMP;
+    const violations = [];
+    const seen = {};
+    COLS.forEach(function (c) {
+      wafer.cols[c].forEach(function (l) {
+        const limit = MATERIAL_TEMP_LIMIT[l.mat];
+        if (l.thk > 0 && limit !== undefined && t > limit && !seen[l.mat]) {
+          seen[l.mat] = true;
+          violations.push({ mat: l.mat, limit: limit, equipTemp: t });
+        }
+      });
+    });
+    return { equipTemp: t, violations: violations };
+  }
+
   // --- 이온주입 (Phase 1-4, G2 교정: PHYSICS_REVIEW 1.2) ---
   //
   // G2 버그(한 컬럼만 노출돼도 전 컬럼 도핑) 교정: 컬럼별 독립 스택 모델 위에서
   // **노출된 컬럼의 최상층만** 도핑한다. 도핑 깊이 d_imp = min(층 두께, D_IMPLANT)
   // — 층이 더 두꺼우면 상부 d_imp만 변환하고 레이어를 분할한다 (하부는 원래 재질).
   // 도즈/에너지 파라미터는 도입하지 않는다 (A급 단순화 유지).
-  const D_IMPLANT = 100; // nm — TODO(REVIEW): 투영비정 R_p 부근 근사 기본값
+  const D_IMPLANT = 100; // nm — 2026-07-06 소유자 승인 (역도핑 허용도 동일 일자 승인)
 
-  // TODO(REVIEW): 도핑 가능 표면 = 단결정 Si 계열 (재주입/역도핑 허용).
-  // Poly-Si 게이트 도핑은 실제로 존재하지만 범위 축소를 위해 제외 — 확인 요청.
-  const IMPLANTABLE = ['Si', 'Si-n', 'Si-p'];
+  // 도핑 가능 표면: 단결정 Si 계열 + Poly-Si 계열.
+  // poly 게이트 도핑은 표준 공정 — 2026-07-06 소유자 지시로 포함.
+  // 도핑된 poly는 결정성을 유지한 채 Poly-Si-n/Poly-Si-p로 변환된다.
+  const IMPLANTABLE = ['Si', 'Si-n', 'Si-p', 'Poly-Si', 'Poly-Si-n', 'Poly-Si-p'];
+
+  function dopedMatFor(baseMat, dopant) {
+    const isPoly = baseMat.indexOf('Poly-Si') === 0;
+    if (isPoly) return (dopant === 'n') ? 'Poly-Si-n' : 'Poly-Si-p';
+    return (dopant === 'n') ? 'Si-n' : 'Si-p';
+  }
 
   function implant(wafer, dopant) {
     const w = cloneWafer(wafer);
-    const newSi = (dopant === 'n') ? 'Si-n' : 'Si-p';
     const results = {};
     COLS.forEach(function (c) {
       const stack = w.cols[c];
@@ -414,16 +456,17 @@
         return;
       }
       const layer = stack[idx];
+      const newMat = dopedMatFor(layer.mat, dopant);
       const d = Math.min(layer.thk, D_IMPLANT);
       if (layer.thk > d) {
         layer.thk -= d; // 하부는 원래 재질 유지
-        stack.splice(idx + 1, 0, { mat: newSi, thk: d });
+        stack.splice(idx + 1, 0, { mat: newMat, thk: d });
       } else {
-        layer.mat = newSi; // 층 전체가 깊이 이내 — 통째 변환
+        layer.mat = newMat; // 층 전체가 깊이 이내 — 통째 변환
       }
-      results[c] = { doped: true, depth: d };
+      results[c] = { doped: true, depth: d, mat: newMat };
     });
-    return { wafer: w, mat: newSi, results: results };
+    return { wafer: w, dopant: dopant, results: results };
   }
 
   return {
@@ -447,6 +490,9 @@
     deepEtch: deepEtch,
     wetEtch: wetEtch,
     D_IMPLANT: D_IMPLANT,
-    implant: implant
+    implant: implant,
+    MATERIAL_TEMP_LIMIT: MATERIAL_TEMP_LIMIT,
+    EQUIP_TEMP: EQUIP_TEMP,
+    checkThermalBudget: checkThermalBudget
   };
 });

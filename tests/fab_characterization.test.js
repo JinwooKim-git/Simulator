@@ -345,6 +345,31 @@ test('F8d: Si가 노출되지 않은 컬럼은 사유와 함께 거부', () => {
   assert.strictEqual(r.wafer.cols.C[0].mat, 'Si');
 });
 
+test('F8f: Poly-Si 게이트 도핑 — 상부 100nm Poly-Si-n + 하부 Poly-Si 유지', () => {
+  // 2026-07-06 소유자 지시: poly 도핑은 표준 공정이므로 포함
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 20); // 게이트 산화막
+  w = Fab.deposit(w, 'Poly-Si', 200);
+  const r = Fab.implant(w, 'n');
+  const stack = r.wafer.cols.C.filter(l => l.thk > 0);
+  assert.strictEqual(stack[stack.length - 1].mat, 'Poly-Si-n');
+  assert.strictEqual(stack[stack.length - 1].thk, 100);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Poly-Si'), 100); // 하부 poly 유지
+  assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 20);     // 산화막 불변
+  assert.strictEqual(r.results.C.mat, 'Poly-Si-n');
+});
+
+test('F8g: 도핑된 poly는 산화·RIE(Poly-Si 타깃)·DRIE 경로에서 Si 계열로 처리', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 20);
+  w = Fab.deposit(w, 'Poly-Si', 100);
+  w = Fab.implant(w, 'n').wafer; // 전층 Poly-Si-n (100 ≤ D_imp)
+  // 산화: Poly-Si-n 위에서 성장해야 함
+  const ox = Fab.oxidize(w, { mode: 'dry', timeMin: 60 });
+  assert.ok(ox.results.C.grown > 0);
+  // RIE Poly-Si 타깃이 도핑 변종도 식각
+  const etched = Fab.dryEtch(w, 'Poly-Si', 100);
+  assert.strictEqual(totalOf(etched, 'C', 'Poly-Si-n'), 0);
+});
+
 test('F8e: 역도핑 — Si-n 위 p implant → 상부만 Si-p로 재변환', () => {
   const first = Fab.implant(Fab.createWafer(300), 'n'); // 상부 100 Si-n
   const second = Fab.implant(first.wafer, 'p');
@@ -375,6 +400,54 @@ test('F10: 식각으로 컬럼별 최상층이 달라지면 topExposed가 이를
   assert.strictEqual(tops.C, 'Si');   // 개구부: SiO2 관통 → Si 노출
   assert.strictEqual(tops.L, 'PR');
   assert.strictEqual(tops.R, 'PR');
+});
+
+// --- F11. 공정 순서 열예산 규칙 (Phase 1-5, L1 — PHYSICS_REVIEW 1.5 T10) ---
+
+test('F11a (T10): Al 존재 + Furnace(1000°C) → 위반 보고', () => {
+  const w = Fab.deposit(Fab.createWafer(200), 'Al', 100);
+  const r = Fab.checkThermalBudget(w, 'furnace');
+  assert.strictEqual(r.equipTemp, 1000);
+  assert.strictEqual(r.violations.length, 1);
+  assert.strictEqual(r.violations[0].mat, 'Al');
+  assert.strictEqual(r.violations[0].limit, 450);
+});
+
+test('F11b (T10): PR 존재 + PECVD(300°C) → 위반 / PR 없음 → 위반 없음', () => {
+  const withPR = Fab.spinCoatPR(Fab.createWafer(200));
+  const r1 = Fab.checkThermalBudget(withPR, 'pecvd');
+  assert.strictEqual(r1.violations.length, 1);
+  assert.strictEqual(r1.violations[0].mat, 'PR');
+  const r2 = Fab.checkThermalBudget(Fab.createWafer(200), 'pecvd');
+  assert.strictEqual(r2.violations.length, 0);
+});
+
+test('F11c: 실온 장비(RIE 등)는 Al/PR이 있어도 위반 없음', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'Al', 100);
+  w = Fab.spinCoatPR(w);
+  const r = Fab.checkThermalBudget(w, 'rie');
+  assert.strictEqual(r.equipTemp, 25);
+  assert.strictEqual(r.violations.length, 0);
+});
+
+test('F11d: 경계 — Al(450°C 한계)은 ALD(250°C) 통과, LPCVD(600°C) 위반', () => {
+  const w = Fab.deposit(Fab.createWafer(200), 'Al', 100);
+  assert.strictEqual(Fab.checkThermalBudget(w, 'ald').violations.length, 0);
+  assert.strictEqual(Fab.checkThermalBudget(w, 'lpcvd').violations.length, 1);
+});
+
+test('F11e: 두께 0으로 제거된 재료(asher 후 PR)는 위반을 유발하지 않음', () => {
+  let w = Fab.spinCoatPR(Fab.createWafer(200));
+  w = Fab.ash(w); // PR 두께 0 (normalize 전)
+  assert.strictEqual(Fab.checkThermalBudget(w, 'furnace').violations.length, 0);
+});
+
+test('F11f: 여러 재료 동시 위반 시 재료당 1건씩 보고', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'Al', 100);
+  w = Fab.spinCoatPR(w);
+  const r = Fab.checkThermalBudget(w, 'furnace');
+  const mats = r.violations.map(v => v.mat).sort();
+  assert.deepStrictEqual(mats, ['Al', 'PR']);
 });
 
 // --- 순수성: 입력 wafer 불변 ---
