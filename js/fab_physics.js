@@ -2,9 +2,8 @@
 //
 // Phase 0에서 구조 분리, Phase 1에서 물리를 순차 교정 중.
 // 교정 완료: G1 열산화(Deal-Grove) — Phase 1-1 / G4 식각 선택비·언더컷 — Phase 1-2 /
-// G3 증착 conformality — Phase 1-3.
-// 잔여 갭(G2 implant 마스킹)은 characterization 테스트가 현재 동작을 고정하고
-// 있으며, 교정 PR에서 물리 기대값 테스트로 교체된다.
+// G3 증착 conformality — Phase 1-3 / G2 implant 마스킹+깊이 — Phase 1-4.
+// Fab의 [E]급 물리 갭(G1~G4)은 모두 교정됨. 다음: 1-5 온도 규칙, 1-6 Metrology.
 //
 // 데이터 모델 (b): 컬럼별 완전 독립 스택 (2026-07-05 소유자 승인)
 //   wafer = {
@@ -387,28 +386,44 @@
     return { wafer: w, target: target, undercuts: undercuts, etched: etched };
   }
 
-  // --- 이온주입 ---
+  // --- 이온주입 (Phase 1-4, G2 교정: PHYSICS_REVIEW 1.2) ---
+  //
+  // G2 버그(한 컬럼만 노출돼도 전 컬럼 도핑) 교정: 컬럼별 독립 스택 모델 위에서
+  // **노출된 컬럼의 최상층만** 도핑한다. 도핑 깊이 d_imp = min(층 두께, D_IMPLANT)
+  // — 층이 더 두꺼우면 상부 d_imp만 변환하고 레이어를 분할한다 (하부는 원래 재질).
+  // 도즈/에너지 파라미터는 도입하지 않는다 (A급 단순화 유지).
+  const D_IMPLANT = 100; // nm — TODO(REVIEW): 투영비정 R_p 부근 근사 기본값
 
-  // TODO(REVIEW): G2 버그를 의도적으로 재현 (Phase 0 characterization).
-  // 기존 코드는 mat이 레이어 전역 속성이라, 한 컬럼만 노출돼도 모든 컬럼의
-  // 최하단 Si 레이어가 도핑되었다. 새 모델에서 그 관찰 동작을 그대로 보존:
-  // "한 컬럼이라도 Si가 노출되면, 마스크로 가린 컬럼 포함 전 컬럼의 최하단
-  // Si 레이어를 도핑". Phase 1-4에서 노출 컬럼만 도핑하도록 교정하고
-  // 이 주석과 테스트 F8을 함께 교체한다. 도핑 깊이 개념도 그때 도입.
+  // TODO(REVIEW): 도핑 가능 표면 = 단결정 Si 계열 (재주입/역도핑 허용).
+  // Poly-Si 게이트 도핑은 실제로 존재하지만 범위 축소를 위해 제외 — 확인 요청.
+  const IMPLANTABLE = ['Si', 'Si-n', 'Si-p'];
+
   function implant(wafer, dopant) {
     const w = cloneWafer(wafer);
     const newSi = (dopant === 'n') ? 'Si-n' : 'Si-p';
-    const tops = topExposed(w);
-    const anyExposed = COLS.some(function (c) { return tops[c] === 'Si'; });
-    if (anyExposed) {
-      COLS.forEach(function (c) {
-        const stack = w.cols[c];
-        for (let i = 0; i < stack.length; i++) {
-          if (stack[i].mat === 'Si' && stack[i].thk > 0) { stack[i].mat = newSi; break; }
-        }
-      });
-    }
-    return { wafer: w, doped: anyExposed, mat: newSi };
+    const results = {};
+    COLS.forEach(function (c) {
+      const stack = w.cols[c];
+      let idx = -1;
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].thk > 0) { idx = i; break; }
+      }
+      if (idx < 0) { results[c] = { doped: false, reason: '빈 컬럼' }; return; }
+      if (IMPLANTABLE.indexOf(stack[idx].mat) < 0) {
+        results[c] = { doped: false, reason: stack[idx].mat + ' 차단' };
+        return;
+      }
+      const layer = stack[idx];
+      const d = Math.min(layer.thk, D_IMPLANT);
+      if (layer.thk > d) {
+        layer.thk -= d; // 하부는 원래 재질 유지
+        stack.splice(idx + 1, 0, { mat: newSi, thk: d });
+      } else {
+        layer.mat = newSi; // 층 전체가 깊이 이내 — 통째 변환
+      }
+      results[c] = { doped: true, depth: d };
+    });
+    return { wafer: w, mat: newSi, results: results };
   }
 
   return {
@@ -431,6 +446,7 @@
     dryEtch: dryEtch,
     deepEtch: deepEtch,
     wetEtch: wetEtch,
+    D_IMPLANT: D_IMPLANT,
     implant: implant
   };
 });

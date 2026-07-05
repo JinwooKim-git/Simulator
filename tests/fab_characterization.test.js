@@ -295,24 +295,63 @@ test('F7d: 언더컷 annotation은 normalize/후속 공정에서 보존된다', 
   assert.ok(lOx.uc && lOx.uc.R > 90);
 });
 
-// --- F8. G2 버그 특성 고정: 한 컬럼만 노출돼도 전 컬럼 도핑 ---
+// --- F8. Implant 마스킹+깊이 (Phase 1-4에서 G2 characterization을 교체) ---
+// 기대값 출처: PHYSICS_REVIEW 1.2 (D_imp = 100nm, REVIEW)
 
-test('F8a: G2 고정 — C만 노출 implant 시 마스크로 가린 L/R까지 Si-n으로', () => {
-  // TODO(REVIEW): 버그를 그대로 고정한 테스트. Phase 1-4에서
-  // "가린 컬럼은 도핑되지 않는다"로 교체한다.
+test('F8a (T5): C만 노출 implant → PR로 가린 L/R은 도핑되지 않는다 (G2 회귀)', () => {
   const w = patterned(Fab.createWafer(200), 'dark'); // C 노출, L/R은 PR
   const r = Fab.implant(w, 'n');
-  assert.strictEqual(r.doped, true);
-  assert.strictEqual(r.wafer.cols.C[0].mat, 'Si-n');
-  assert.strictEqual(r.wafer.cols.L[0].mat, 'Si-n'); // 버그: 가린 컬럼도 도핑됨
-  assert.strictEqual(r.wafer.cols.R[0].mat, 'Si-n');
+  assert.strictEqual(r.results.C.doped, true);
+  assert.strictEqual(r.results.L.doped, false);
+  assert.strictEqual(r.results.R.doped, false);
+  // C: 200nm Si → 상부 100 Si-n / 하부 100 Si 분할
+  const cMats = r.wafer.cols.C.filter(l => l.thk > 0).map(l => l.mat);
+  assert.ok(cMats.includes('Si-n'));
+  // L/R: 재질 완전 불변
+  assert.strictEqual(r.wafer.cols.L.some(l => l.mat === 'Si-n'), false);
+  assert.strictEqual(r.wafer.cols.R.some(l => l.mat === 'Si-n'), false);
 });
 
-test('F8b: Si가 어느 컬럼에도 노출되지 않으면 도핑 없음', () => {
+test('F8b (T6): 300nm Si에 D=100 implant → 상부 100nm Si-n + 하부 200nm Si 분할', () => {
+  const r = Fab.implant(Fab.createWafer(300), 'n');
+  for (const c of Fab.COLS) {
+    const stack = r.wafer.cols[c].filter(l => l.thk > 0);
+    assert.strictEqual(stack.length, 2);
+    assert.strictEqual(stack[0].mat, 'Si');   assert.strictEqual(stack[0].thk, 200);
+    assert.strictEqual(stack[1].mat, 'Si-n'); assert.strictEqual(stack[1].thk, 100);
+    assert.strictEqual(r.results[c].depth, 100);
+  }
+});
+
+test('F8c: 층이 D_imp보다 얇으면 통째 변환 (분할 없음, 하부 침범 없음)', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 50);
+  w = Fab.deposit(w, 'Si', 60); // SOI류: 60nm Si / SiO2 / Si
+  const r = Fab.implant(w, 'p');
+  const top = r.wafer.cols.C.filter(l => l.thk > 0);
+  assert.strictEqual(top[top.length - 1].mat, 'Si-p');
+  assert.strictEqual(top[top.length - 1].thk, 60);
+  assert.strictEqual(r.results.C.depth, 60);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 50); // 하부 불변
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 200);
+});
+
+test('F8d: Si가 노출되지 않은 컬럼은 사유와 함께 거부', () => {
   const w = Fab.deposit(Fab.createWafer(200), 'SiO2', 50);
   const r = Fab.implant(w, 'p');
-  assert.strictEqual(r.doped, false);
+  for (const c of Fab.COLS) {
+    assert.strictEqual(r.results[c].doped, false);
+    assert.ok(r.results[c].reason.includes('SiO2'));
+  }
   assert.strictEqual(r.wafer.cols.C[0].mat, 'Si');
+});
+
+test('F8e: 역도핑 — Si-n 위 p implant → 상부만 Si-p로 재변환', () => {
+  const first = Fab.implant(Fab.createWafer(300), 'n'); // 상부 100 Si-n
+  const second = Fab.implant(first.wafer, 'p');
+  const stack = second.wafer.cols.C.filter(l => l.thk > 0);
+  assert.strictEqual(stack[stack.length - 1].mat, 'Si-p');
+  assert.strictEqual(stack[stack.length - 1].thk, 100);
+  assert.strictEqual(totalOf(second.wafer, 'C', 'Si'), 200); // 하부 Si 불변
 });
 
 // --- F9. Asher + normalize ---
