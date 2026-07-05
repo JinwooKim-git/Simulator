@@ -1,0 +1,6 @@
+# Secrets
+.env
+*.key
+
+# Dependencies (프로젝트는 외부 의존성 0이 원칙 — 실수로 생겨도 커밋 금지)
+node_modules/
