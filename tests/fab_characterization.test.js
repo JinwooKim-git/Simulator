@@ -95,15 +95,44 @@ test('F1f: Poly-Si도 산화되며, 소모돼도 하부 재질은 침범하지 �
   assert.strictEqual(totalOf(r.wafer, 'C', 'Al'), 50); // 하부 Al 불변
 });
 
-// --- F2. G3 특성: 모든 증착이 단차와 무관하게 전 컬럼 균일 ---
+// --- F2. 증착 conformality (Phase 1-3에서 G3 characterization을 교체) ---
+// 기대값 출처: PHYSICS_REVIEW 1.3 (계수는 REVIEW)
 
-test('F2: 단차 있는 웨이퍼에도 증착은 전 컬럼 동일 두께', () => {
+// 헬퍼: C에 100nm 단차가 있는 웨이퍼 (L/R 높이 300, C 높이 200)
+function steppedWafer() {
   let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
-  w = patterned(w, 'dark');            // C 개구
-  w = Fab.normalize(Fab.dryEtch(w, 'SiO2', 100)); // C에 100nm 단차
+  w = patterned(w, 'dark');
+  w = Fab.normalize(Fab.dryEtch(w, 'SiO2', 100));
   w = Fab.ash(w);
-  w = Fab.normalize(w);
-  w = Fab.deposit(w, 'SiNx', 50);
+  return Fab.normalize(w);
+}
+
+test('F2a (T7): 100nm 단차 + PVD(0.3) 100nm → 트렌치 바닥 30nm', () => {
+  const w = Fab.deposit(steppedWafer(), 'Al', 100, Fab.STEP_COVERAGE.pvd);
+  assert.ok(Math.abs(totalOf(w, 'C', 'Al') - 30) / 30 <= 0.1, `C=${totalOf(w, 'C', 'Al')}`);
+  assert.strictEqual(totalOf(w, 'L', 'Al'), 100); // 상면은 명목 두께
+  assert.strictEqual(totalOf(w, 'R', 'Al'), 100);
+});
+
+test('F2b (T7): 같은 구조 ALD(1.0) → 바닥도 100nm (완전 컨포멀)', () => {
+  const w = Fab.deposit(steppedWafer(), 'HfO2', 100, Fab.STEP_COVERAGE.ald);
+  for (const c of Fab.COLS) assert.strictEqual(totalOf(w, c, 'HfO2'), 100);
+});
+
+test('F2c: 단차 없는 웨이퍼에는 PVD도 전 컬럼 균일', () => {
+  const w = Fab.deposit(Fab.createWafer(200), 'Al', 100, Fab.STEP_COVERAGE.pvd);
+  for (const c of Fab.COLS) assert.strictEqual(totalOf(w, c, 'Al'), 100);
+});
+
+test('F2d: LPCVD 0.9 / PECVD 0.6 계수 적용', () => {
+  const lp = Fab.deposit(steppedWafer(), 'SiNx', 100, Fab.STEP_COVERAGE.lpcvd);
+  assert.ok(Math.abs(totalOf(lp, 'C', 'SiNx') - 90) < 1e-9);
+  const pe = Fab.deposit(steppedWafer(), 'SiNx', 100, Fab.STEP_COVERAGE.pecvd);
+  assert.ok(Math.abs(totalOf(pe, 'C', 'SiNx') - 60) < 1e-9);
+});
+
+test('F2e: coverage 생략 시 1.0 (하위 호환 — 기존 테스트 헬퍼 보호)', () => {
+  const w = Fab.deposit(steppedWafer(), 'SiNx', 50);
   for (const c of Fab.COLS) assert.strictEqual(totalOf(w, c, 'SiNx'), 50);
 });
 
