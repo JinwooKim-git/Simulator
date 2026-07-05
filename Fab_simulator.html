@@ -183,9 +183,9 @@
         'track': { title: 'PR Track', html: `<div class="form-group"><label>Operation</label><select id="p-op"><option value="coat">Spin Coat</option><option value="dev">Develop</option></select></div>` },
         'stepper': { title: 'Nikon Stepper', html: `<div class="form-group"><label>Mask Type</label><select id="p-mask"><option value="dark">Trench/Hole (Exposes Center)</option><option value="clear">Line/Gate (Exposes Edges)</option></select></div>` },
         'drie': { title: 'STS ICP-RIE', html: `<div class="form-group"><label>Etch Time (sec)</label><input type="number" id="p-time" value="60"></div>` },
-        'rie': { title: 'Lam RIE', html: `<div class="form-group"><label>Target Material to Etch</label><select id="p-target"><option value="Poly-Si">Poly-Silicon</option><option value="SiO2">Oxide (SiO2)</option><option value="SiNx">Nitride (SiNx)</option><option value="Al">Metal (Al)</option><option value="HfO2">High-k (HfO2)</option></select></div><div class="form-group"><label>Etch Amount (nm)</label><input type="number" id="p-amt" value="50"></div>` },
+        'rie': { title: 'Lam RIE', html: `<div class="form-group"><label>Target Material to Etch</label><select id="p-target"><option value="Poly-Si">Poly-Silicon</option><option value="SiO2">Oxide (SiO2)</option><option value="SiNx">Nitride (SiNx)</option><option value="Al">Metal (Al)</option><option value="HfO2">High-k (HfO2)</option></select></div><div class="form-group"><label>Etch Amount (nm)</label><input type="number" id="p-amt" value="50"></div><div class="helper-text">* 유한 선택비 — over-etch 시 하부막이 선택비 비율로 소모됩니다.</div>` },
         'asher': { title: 'O2 Asher', html: `<div class="helper-text">Plasma PR Strip.</div>` },
-        'wet_etch': { title: 'Wet Bath', html: `<div class="form-group"><label>Etchant</label><select id="p-etchant"><option value="BOE">BOE (Etches SiO2)</option><option value="PAN">PAN (Etches Al)</option></select></div>` },
+        'wet_etch': { title: 'Wet Bath', html: `<div class="form-group"><label>Etchant</label><select id="p-etchant"><option value="BOE">BOE (Etches SiO2)</option><option value="PAN">PAN (Etches Al)</option></select></div><div class="helper-text">* 등방성 식각 — 마스크 아래로 언더컷(측면 파임)이 생깁니다.</div>` },
         'wet_clean': { title: 'SPM Clean', html: `<div class="helper-text">Wafer Cleaning.</div>` }
     };
 
@@ -256,7 +256,10 @@
             case 'wet_etch': {
                 const r = FabPhysics.wetEtch(wafer, document.getElementById('p-etchant').value);
                 wafer = r.wafer;
-                log(`Wet Bath 노출된 ${r.target} 제거됨.`);
+                const totalRemoved = r.etched.L + r.etched.C + r.etched.R;
+                if (totalRemoved > 0) log(`Wet Bath 노출된 ${r.target} 제거됨.`);
+                else log(`${r.target} 노출면 없음 — 변화 없음.`);
+                r.undercuts.forEach(u => log(`&nbsp;&nbsp;⚠ 등방성 언더컷: [${u.col}] ${u.mat} 마스크 아래 ~${u.nm.toFixed(0)}nm 파임`));
                 break;
             }
             case 'asher':
@@ -292,6 +295,21 @@
                 const lh = layer.thk * scale;
                 ctx.fillRect(colW * idx, y - lh, colW, lh);
                 ctx.strokeRect(colW * idx, y - lh, colW, lh);
+                // wet 언더컷 annotation → 개구부 쪽 모서리에 notch 렌더
+                if (layer.uc) {
+                    ctx.fillStyle = '#0f0f13';
+                    const drawNotch = (edgeX, dir, nm) => {
+                        const wpx = Math.min(nm * scale, colW * 0.45);
+                        if (wpx <= 0) return;
+                        ctx.beginPath();
+                        ctx.moveTo(edgeX, y - lh);
+                        ctx.lineTo(edgeX + dir * wpx, y - lh + lh * 0.5);
+                        ctx.lineTo(edgeX, y);
+                        ctx.closePath(); ctx.fill();
+                    };
+                    if (layer.uc.L > 0) drawNotch(colW * idx, 1, layer.uc.L);
+                    if (layer.uc.R > 0) drawNotch(colW * (idx + 1), -1, layer.uc.R);
+                }
                 y -= lh;
             });
         });

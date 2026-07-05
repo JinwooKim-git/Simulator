@@ -165,13 +165,21 @@ test('F4e: 리소 1회 완료 후 재코팅한 새 PR은 미노광 — 즉시 de
   assert.strictEqual(totalOf(r.wafer, 'C', 'PR'), 60); // PR 그대로
 });
 
-// --- F5. G4 특성: RIE 무한 선택비 — 다른 재질에서 무조건 정지, 하부 손실 0 ---
+// --- F5. RIE 유한 선택비 (Phase 1-2에서 G4 characterization을 교체) ---
+// 기대값 출처: PHYSICS_REVIEW 1.4 (선택비 테이블은 전부 REVIEW)
 
-test('F5a: SiO2 50nm 위 RIE(SiO2, 100nm) → SiO2만 제거, Si 무손실', () => {
-  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 50);
-  w = Fab.dryEtch(w, 'SiO2', 100); // 50nm over-etch
+test('F5a (T8): oxide 200nm RIE 20% over-etch → 하부 Si 손실 ≈ 5nm (±20%)', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 200);
+  w = Fab.dryEtch(w, 'SiO2', 240); // 240nm = 20% over-etch
   assert.strictEqual(totalOf(w, 'C', 'SiO2'), 0);
-  assert.strictEqual(totalOf(w, 'C', 'Si'), 200); // over-etch 손실 없음 (G4 고정)
+  const siLoss = 200 - totalOf(w, 'C', 'Si'); // 기대 40/8 = 5nm
+  assert.ok(Math.abs(siLoss - 5) / 5 <= 0.2, `siLoss=${siLoss}`);
+});
+
+test('F5a2: 정확히 타깃 두께만 식각하면 하부 손실 0', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 200);
+  w = Fab.dryEtch(w, 'SiO2', 200);
+  assert.strictEqual(totalOf(w, 'C', 'Si'), 200);
 });
 
 test('F5b: 타깃이 노출되지 않은 컬럼은 식각되지 않음', () => {
@@ -189,44 +197,73 @@ test('F6a: bare Si에 DRIE 60sec → 각 컬럼 180nm 식각', () => {
   for (const c of Fab.COLS) assert.strictEqual(totalOf(r.wafer, c, 'Si'), 320);
 });
 
-test('F6b: 최상층 Poly-Si → DRIE가 식각하지 않음 (startsWith 매칭의 기존 동작)', () => {
+test('F6b: DRIE가 Poly-Si도 식각 (Bosch는 Si 계열 전체 — Phase 1-2에서 쿼크 교정)', () => {
+  // Phase 0의 startsWith('Si') 매칭이 Poly-Si를 제외하던 비의도 동작을 교정.
   let w = Fab.deposit(Fab.createWafer(200), 'Poly-Si', 100);
-  const r = Fab.deepEtch(w, 60);
-  assert.strictEqual(totalOf(r.wafer, 'C', 'Poly-Si'), 100);
+  const r = Fab.deepEtch(w, 60); // 180nm: Poly 100 관통 → Si 80 식각
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Poly-Si'), 0);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 120);
+});
+
+test('F6c: 최상층 SiO2는 DRIE 게이트에서 차단 (startsWith 관통 쿼크 교정)', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 50);
+  const r = Fab.deepEtch(w, 30);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 50); // 불변
   assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 200);
 });
 
-test('F6c: 기존 쿼크 고정 — 최상층 SiO2도 startsWith("Si")라 DRIE가 관통', () => {
-  // TODO(REVIEW): 비의도적 동작으로 보임. Phase 1에서 Si 계열 정의 재검토.
+test('F6d: DRIE가 SiO2에 착지하면 50:1로 소모 (Bosch 선택비)', () => {
+  // Si 200 / SiO2 50 / Si 200(기판): 위 Si 관통 후 잔여가 SiO2를 /50로 소모
   let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 50);
-  const r = Fab.deepEtch(w, 30); // 90nm: SiO2 50 관통 후 Si 40 식각
-  assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 0);
-  assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 160);
+  w = Fab.deposit(w, 'Si', 90);
+  const r = Fab.deepEtch(w, 60); // 180nm: Si 90 관통, 잔여 90 → SiO2 손실 90/50 = 1.8nm
+  const oxLoss = 50 - totalOf(r.wafer, 'C', 'SiO2');
+  assert.ok(Math.abs(oxLoss - 1.8) < 0.01, `oxLoss=${oxLoss}`);
+  assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 200); // 산화막 아래 기판 불변
 });
 
-// --- F7. Wet etch: 노출 타깃 전량 제거, 언더컷 없음 (G4 고정) ---
+// --- F7. Wet etch: 수직 전량 제거 + 등방성 언더컷 annotation (Phase 1-2) ---
 
-test('F7a: BOE → 노출된 SiO2 800nm 전량 제거, Si 무손실', () => {
+test('F7a: BOE → 노출된 SiO2 800nm 전량 제거, Si 무손실 (고선택비 근사)', () => {
   let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 800);
   const r = Fab.wetEtch(w, 'BOE');
   assert.strictEqual(r.target, 'SiO2');
   assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 0);
   assert.strictEqual(totalOf(r.wafer, 'C', 'Si'), 200);
+  assert.strictEqual(r.undercuts.length, 0); // 전 컬럼 개구 — 언더컷 없음
 });
 
-test('F7b: PAN은 Al만 — SiO2 최상층이면 아무것도 제거하지 않음', () => {
+test('F7b: PAN은 Al만 — SiO2 노출 시 손실 0 (PHYSICS_REVIEW 1.4 백테스트)', () => {
   let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
   const r = Fab.wetEtch(w, 'PAN');
   assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 100);
+  assert.strictEqual(r.undercuts.length, 0);
 });
 
-test('F7c: PR로 가린 컬럼의 SiO2는 BOE에서 보호됨 (언더컷 없음 — G4 고정)', () => {
+test('F7c (T9): BOE로 C의 SiO2 100nm 제거 → L/R 마스크 아래 undercut ≈ 100nm 기록', () => {
   let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
-  w = patterned(w, 'dark'); // C만 SiO2 노출
+  w = patterned(w, 'dark'); // C만 SiO2 노출, L/R은 PR 마스크
   const r = Fab.wetEtch(w, 'BOE');
   assert.strictEqual(totalOf(r.wafer, 'C', 'SiO2'), 0);
-  assert.strictEqual(totalOf(r.wafer, 'L', 'SiO2'), 100); // 언더컷 없음
+  // 두께 배열은 불변 (재료 회계 원칙)
+  assert.strictEqual(totalOf(r.wafer, 'L', 'SiO2'), 100);
   assert.strictEqual(totalOf(r.wafer, 'R', 'SiO2'), 100);
+  // 언더컷은 annotation으로: 개구부(C)를 향한 면에 ≈ 식각 깊이
+  const lOx = r.wafer.cols.L.find(l => l.mat === 'SiO2');
+  const rOx = r.wafer.cols.R.find(l => l.mat === 'SiO2');
+  assert.ok(Math.abs(lOx.uc.R - 100) / 100 <= 0.1, `L.uc.R=${lOx.uc.R}`);
+  assert.ok(Math.abs(rOx.uc.L - 100) / 100 <= 0.1, `R.uc.L=${rOx.uc.L}`);
+  assert.strictEqual(r.undercuts.length, 2);
+});
+
+test('F7d: 언더컷 annotation은 normalize/후속 공정에서 보존된다', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
+  w = patterned(w, 'dark');
+  w = Fab.wetEtch(w, 'BOE').wafer;
+  w = Fab.normalize(Fab.ash(w));
+  w = Fab.deposit(w, 'SiNx', 30);
+  const lOx = w.cols.L.find(l => l.mat === 'SiO2');
+  assert.ok(lOx.uc && lOx.uc.R > 90);
 });
 
 // --- F8. G2 버그 특성 고정: 한 컬럼만 노출돼도 전 컬럼 도핑 ---
