@@ -450,6 +450,53 @@ test('F11f: 여러 재료 동시 위반 시 재료당 1건씩 보고', () => {
   assert.deepStrictEqual(mats, ['Al', 'PR']);
 });
 
+// --- F12. Metrology 측정 (Phase 1-6 — PHYSICS_REVIEW 1.6) ---
+
+test('F12a: measure — 평탄 웨이퍼는 step height 0', () => {
+  const m = Fab.measure(Fab.createWafer(200));
+  assert.deepStrictEqual(m.heights, { L: 200, C: 200, R: 200 });
+  assert.strictEqual(m.stepHeight, 0);
+});
+
+test('F12b: measure — 단차 구조의 step height', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
+  w = patterned(w, 'dark');
+  w = Fab.normalize(Fab.dryEtch(w, 'SiO2', 100));
+  w = Fab.normalize(Fab.ash(w));
+  const m = Fab.measure(w);
+  assert.strictEqual(m.stepHeight, 100);
+});
+
+test('F12c: heightDelta — conformality가 컬럼별 편차로 드러남', () => {
+  let w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
+  w = patterned(w, 'dark');
+  w = Fab.normalize(Fab.dryEtch(w, 'SiO2', 100));
+  w = Fab.normalize(Fab.ash(w));
+  const pre = Fab.heights(w);
+  w = Fab.deposit(w, 'Al', 100, Fab.STEP_COVERAGE.pvd);
+  const d = Fab.heightDelta(pre, Fab.heights(w));
+  assert.strictEqual(d.L, 100);
+  assert.strictEqual(d.C, 30); // target 100 대비 −70 편차가 측정으로 보임
+  assert.strictEqual(d.R, 100);
+});
+
+test('F12d: heightDelta — 산화의 표면 상승은 0.56×성장 (Si 소모가 측정으로 드러남)', () => {
+  const w = Fab.createWafer(500);
+  const pre = Fab.heights(w);
+  const r = Fab.oxidize(w, { mode: 'dry', timeMin: 60 });
+  const d = Fab.heightDelta(pre, Fab.heights(r.wafer));
+  const expected = 0.56 * r.results.C.grown;
+  assert.ok(Math.abs(d.C - expected) < 0.01, `d.C=${d.C} vs 0.56×grown=${expected}`);
+});
+
+test('F12e: heightDelta — 식각은 음수', () => {
+  const w = Fab.deposit(Fab.createWafer(200), 'SiO2', 100);
+  const pre = Fab.heights(w);
+  const post = Fab.heights(Fab.dryEtch(w, 'SiO2', 50));
+  const d = Fab.heightDelta(pre, post);
+  assert.strictEqual(d.C, -50);
+});
+
 // --- 순수성: 입력 wafer 불변 ---
 
 test('P1: 함수는 입력 wafer를 변경하지 않는다', () => {

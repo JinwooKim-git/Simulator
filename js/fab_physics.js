@@ -394,6 +394,28 @@
     return { wafer: w, target: target, undercuts: undercuts, etched: etched };
   }
 
+  // --- Metrology 측정 (Phase 1-6: PHYSICS_REVIEW 1.6) ---
+  //
+  // "측정으로 공정을 확인한다"의 계산 부분. 이력 테이블·렌더링은 UI에 있고,
+  // 여기는 순수 계산만: 컬럼별 총두께, step height, 스텝 전후 높이 변화.
+  function measure(wafer) {
+    const h = heights(wafer);
+    const vals = [h.L, h.C, h.R];
+    return {
+      heights: h,
+      stepHeight: Math.max.apply(null, vals) - Math.min.apply(null, vals)
+    };
+  }
+
+  // 스텝 전후 컬럼별 높이 변화 (부호 있음: 증착 +, 식각 −).
+  // target 편차 표시의 기준값 — 산화는 Si 소모 때문에 |Δh| = 0.56×성장 두께가 되는데,
+  // 이 불일치 자체가 교육 포인트다 (표면은 성장분만큼 올라가지 않는다).
+  function heightDelta(preHeights, postHeights) {
+    const d = {};
+    COLS.forEach(function (c) { d[c] = postHeights[c] - preHeights[c]; });
+    return d;
+  }
+
   // --- 공정 순서 열예산 규칙 (Phase 1-5, L1: PHYSICS_REVIEW 1.5) ---
   //
   // 개별 공정이 다 맞아도 순서가 틀리면 소자가 죽는다 — 공정 통합의 제1 감각.
@@ -494,6 +516,8 @@
     implant: implant,
     MATERIAL_TEMP_LIMIT: MATERIAL_TEMP_LIMIT,
     EQUIP_TEMP: EQUIP_TEMP,
-    checkThermalBudget: checkThermalBudget
+    checkThermalBudget: checkThermalBudget,
+    measure: measure,
+    heightDelta: heightDelta
   };
 });
