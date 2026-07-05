@@ -226,7 +226,9 @@
         return Array.from(modalBody.querySelectorAll('input, select'))
             .map(el => `${el.id.replace('p-', '')}=${el.value}`).join(' ');
     }
-    function addHistoryRow(equipTitle, params, m, delta, goal) {
+    // extra: 산화처럼 '높이 변화'만으로 오해 소지가 있는 공정의 부가 표시
+    // (2026-07-06 소유자 지시: 산화 행은 성장 두께와 표면 상승을 둘 다 표시)
+    function addHistoryRow(equipTitle, params, m, delta, goal, extra) {
         stepCount++;
         const fmt = (v) => Math.round(v * 10) / 10;
         let goalCell = '—', devCell = '—';
@@ -238,10 +240,11 @@
                 return `<span style="color:${color}">${dev >= 0 ? '+' : ''}${dev}</span>`;
             }).join('/');
         }
+        const extraHtml = extra ? `<br><span style="color:#4da8da;">${extra}</span>` : '';
         document.getElementById('history-body').insertAdjacentHTML('beforeend',
             `<tr style="border-top:1px solid #2a2a33;">
                 <td style="padding:2px 4px;">${stepCount}</td><td>${equipTitle}</td>
-                <td style="color:#888;">${params}</td>
+                <td style="color:#888;">${params}${extraHtml}</td>
                 <td>${fmt(m.heights.L)}/${fmt(m.heights.C)}/${fmt(m.heights.R)}</td>
                 <td>${fmt(m.stepHeight)}</td><td>${goalCell}</td><td>${devCell}</td>
             </tr>`);
@@ -265,6 +268,7 @@
         const runParams = paramsSummary();
         const goalStr = document.getElementById('p-goal').value;
         const goal = goalStr === '' ? null : parseFloat(goalStr);
+        let historyExtra = null; // 산화 등 부가 표시용
 
         switch(currentEquip) {
             case 'furnace': {
@@ -279,6 +283,12 @@
                     if (res.grown > 0) log(`&nbsp;&nbsp;[${c}] SiO2 +${res.grown.toFixed(1)}nm 성장, Si ${res.consumed.toFixed(1)}nm 소모`);
                     else log(`&nbsp;&nbsp;[${c}] 성장 없음 (${res.reason})`);
                 });
+                // 산화는 표면 상승(Δh = 성장 − Si 소모)이 성장 두께보다 작다 —
+                // 이력에 둘 다 표시해 Si 소모가 오해 없이 드러나게 (소유자 지시)
+                const grownParts = FabPhysics.COLS
+                    .filter(c => r.results[c].grown > 0)
+                    .map(c => `[${c}] 성장 ${r.results[c].grown.toFixed(1)} / 표면↑ ${(r.results[c].grown - r.results[c].consumed).toFixed(1)}`);
+                if (grownParts.length) historyExtra = `산화막(nm): ${grownParts.join(' · ')}`;
                 break;
             }
             case 'pecvd': case 'lpcvd': case 'ald': case 'endura': {
@@ -357,7 +367,7 @@
         // 측정 (Phase 1-6): 컬럼별 총두께·step height·변화량 → 이력 테이블 + 로그
         const m = FabPhysics.measure(wafer);
         const delta = FabPhysics.heightDelta(preHeights, m.heights);
-        addHistoryRow(equipConfigs[currentEquip].title, runParams, m, delta, goal);
+        addHistoryRow(equipConfigs[currentEquip].title, runParams, m, delta, goal, historyExtra);
         log(`측정: L ${m.heights.L.toFixed(1)} / C ${m.heights.C.toFixed(1)} / R ${m.heights.R.toFixed(1)} nm · step height ${m.stepHeight.toFixed(1)}nm`);
         if (goal !== null && !isNaN(goal)) {
             const devs = FabPhysics.COLS.map(c => `[${c}] ${(Math.abs(delta[c]) - goal) >= 0 ? '+' : ''}${(Math.abs(delta[c]) - goal).toFixed(1)}`).join(' ');
